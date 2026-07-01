@@ -1,0 +1,548 @@
+import { useEffect, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import {
+  getCompany,
+  getCompanyFundamentals,
+  uploadDocument,
+  addToWatchlist,
+  removeFromWatchlist,
+  getWatchlist,
+  getThesis,
+  triggerAutoResearch,
+  refreshPrice,
+  refreshFundamentals,
+  getNotes,
+  saveNote
+} from '../lib/api'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../hooks/useAuth'
+import ChatPanel from '../components/chat/ChatPanel'
+import ThesisForm from '../components/thesis/ThesisForm'
+import TradingViewWidget from '../components/TradingViewWidget'
+import Markdown from '../components/ui/Markdown'
+import toast from 'react-hot-toast'
+
+const TABS = [
+  { id: 'research', label: '🔬 AI Research' },
+  { id: 'thesis',   label: '📋 Thesis Builder' },
+  { id: 'notes',    label: '📝 Notes' },
+]
+
+export default function Company() {
+  const { id: companyId } = useParams()
+  const { user } = useAuth()
+  const navigate = useNavigate()
+
+  const [company, setCompany] = useState(null)
+  const [fundamentals, setFundamentals] = useState(null)
+  const [documents, setDocuments] = useState([])
+  const [selectedDocId, setSelectedDocId] = useState(null)
+  const [thesis, setThesis] = useState(null)
+  const [notes, setNotes] = useState('')
+  const [notesList, setNotesList] = useState([])
+  const [selectedNoteId, setSelectedNoteId] = useState(null)
+  const [isWatched, setIsWatched] = useState(false)
+  const [activeTab, setActiveTab] = useState('research')
+  const [uploading, setUploading] = useState(false)
+  const [autoResearching, setAutoResearching] = useState(false)
+  const [agentResult, setAgentResult] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshingPrice, setRefreshingPrice] = useState(false)
+  const [refreshingFundamentals, setRefreshingFundamentals] = useState(false)
+
+  useEffect(() => {
+    if (companyId && user?.id) {
+      setSelectedDocId(null)
+      setNotes('')
+      setNotesList([])
+      setSelectedNoteId(null)
+      setThesis(null)
+      setActiveTab('research')
+      setAgentResult(null)
+      loadCompanyData()
+    }
+  }, [companyId, user?.id])
+
+  const loadCompanyData = async () => {
+    setLoading(true)
+    try {
+      const [compRes, fundRes] = await Promise.all([
+        getCompany(companyId),
+        getCompanyFundamentals(companyId).catch(() => ({ data: null }))
+      ])
+      setCompany(compRes.data)
+      setFundamentals(fundRes.data)
+
+      // Auto-refresh price on every visit (lightweight, NSE node only)
+      try {
+        const priceRes = await refreshPrice(companyId)
+        setFundamentals(prev => ({ ...prev, ...priceRes.data }))
+      } catch (e) {
+        console.warn('Price auto-refresh failed, using cached:', e)
+      }
+
+      await fetchDocuments()
+
+      try {
+        const thesisRes = await getThesis(companyId)
+        setThesis(thesisRes.data)
+      } catch { setThesis(null) }
+
+      try {
+        const notesRes = await getNotes(companyId)
+        setNotesList(notesRes.data || [])
+        setNotes('')
+        setSelectedNoteId(null)
+      } catch {
+        setNotesList([])
+      }
+
+      const watchRes = await getWatchlist()
+      const watched = (watchRes.data || []).some(w => w.company_id === companyId)
+      setIsWatched(watched)
+    } catch (err) {
+      console.error('Load error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchDocuments = async () => {
+    const { data } = await supabase
+      .from('documents')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('user_id', user?.id)
+      .order('uploaded_at', { ascending: false })
+    setDocuments(data || [])
+    if (data?.length > 0 && !selectedDocId) {
+      setSelectedDocId(data[0].id)
+    }
+  }
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('company_id', companyId)
+      formData.append('doc_type', 'annual_report')
+      formData.append('fiscal_year', 'FY24')
+
+      const res = await uploadDocument(formData)
+      toast.success(`Processed ${res.data.page_count} pages, ${res.data.chunk_count} chunks`)
+      await fetchDocuments()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Upload failed')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleAutoResearch = async () => {
+    setAutoResearching(true)
+    try {
+      const res = await triggerAutoResearch(companyId)
+      
+      if (res.data.status === 'pending_confirmation') {
+         const urls = res.data.candidate_urls || [];
+         let confirmedUrl = null;
+         for (const url of urls) {
+            const ok = window.confirm(`Found PDF at:\n${url}\n\nDo you want to upload this?`);
+            if (ok) {
+               confirmedUrl = url;
+               break;
+            }
+         }
+         
+         if (confirmedUrl) {
+            toast('Processing confirmed PDF...', { icon: '⏳' });
+            const processRes = await triggerAutoResearch(companyId, { target_url: confirmedUrl });
+            setAgentResult(processRes.data);
+            if (processRes.data.pdf_processed) {
+              toast.success('Report processed! You can now ask questions.')
+              await fetchDocuments()
+            } else {
+              toast.error('Failed to process the confirmed PDF.')
+            }
+         } else {
+            toast('Auto research cancelled or no PDF selected.');
+            setAgentResult({ news_summary: res.data.news_summary, pdf_processed: false });
+         }
+      } else {
+        setAgentResult(res.data)
+        if (res.data.pdf_processed) {
+          toast.success('Report processed! You can now ask questions.')
+          await fetchDocuments()
+        } else {
+          toast('News summary ready. Upload PDF for full research.', { icon: '⚠️' })
+        }
+      }
+    } catch (err) {
+      toast.error('Auto research failed. Please upload PDF manually.')
+    } finally {
+      setAutoResearching(false)
+    }
+  }
+
+  const handleWatchlistToggle = async () => {
+    try {
+      if (isWatched) {
+        await removeFromWatchlist(companyId)
+        setIsWatched(false)
+        toast.success('Removed from watchlist')
+      } else {
+        await addToWatchlist(companyId)
+        setIsWatched(true)
+        toast.success('Added to watchlist')
+      }
+    } catch {
+      toast.error('Failed to update watchlist')
+    }
+  }
+
+  const formatDateTime = (dateStr) => {
+    if (!dateStr) return ''
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return dateStr
+    const day = String(d.getDate()).padStart(2, '0')
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const year = d.getFullYear()
+    const hours = String(d.getHours()).padStart(2, '0')
+    const minutes = String(d.getMinutes()).padStart(2, '0')
+    return `${day}-${month}-${year} ${hours}:${minutes}`
+  }
+
+  const handleNoteSave = async () => {
+    if (!notes.trim()) {
+      toast.error('Note content cannot be empty')
+      return
+    }
+    try {
+      const payload = {
+        company_id: companyId,
+        content: notes
+      }
+      if (selectedNoteId) {
+        payload.id = selectedNoteId
+      }
+      const res = await saveNote(payload)
+      toast.success(selectedNoteId ? 'Note updated' : 'Note saved')
+      
+      const notesRes = await getNotes(companyId)
+      setNotesList(notesRes.data || [])
+      
+      if (!selectedNoteId) {
+        setNotes('')
+      }
+    } catch {
+      toast.error('Failed to save notes')
+    }
+  }
+
+  const handleRefreshPrice = async () => {
+    setRefreshingPrice(true)
+    try {
+      const res = await refreshPrice(companyId)
+      setFundamentals(prev => ({ ...prev, ...res.data }))
+      toast.success('Price updated')
+    } catch {
+      toast.error('Price refresh failed')
+    } finally {
+      setRefreshingPrice(false)
+    }
+  }
+
+  const handleRefreshFundamentals = async () => {
+    setRefreshingFundamentals(true)
+    try {
+      const res = await refreshFundamentals(companyId)
+      setFundamentals(res.data)
+      toast.success('Fundamentals updated')
+    } catch {
+      toast.error('Fundamentals refresh failed')
+    } finally {
+      setRefreshingFundamentals(false)
+    }
+  }
+
+  const formatPercent = (val) => val != null ? `${(val * 100).toFixed(1)}%` : 'N/A'
+  const formatRatio = (val) => val != null ? val.toFixed(1) + 'x' : 'N/A'
+  const formatPrice = (val) => val != null ? `₹${val.toLocaleString('en-IN')}` : 'N/A'
+  const formatCap = (val) => {
+    if (!val) return 'N/A'
+    if (val >= 1e12) return `₹${(val / 1e12).toFixed(1)}T`
+    if (val >= 1e9) return `₹${(val / 1e9).toFixed(0)}B`
+    return `₹${(val / 1e7).toFixed(0)}Cr`
+  }
+
+  if (loading) {
+    return <div style={{padding: '20px'}}>Loading...</div>
+  }
+
+  if (!company) {
+    return <div style={{padding: '20px'}}>Company not found</div>
+  }
+
+  return (
+    <div className="view active">
+      <div className="company-header">
+        <div className="company-logo">{company.ticker.slice(0, 2)}</div>
+        <div className="company-info">
+          <div className="company-name">{company.name}</div>
+          <div className="company-meta">{company.exchange}: {company.ticker} · {company.sector}</div>
+          <div className="company-desc">{company.description || 'No description available.'}</div>
+          <div className="company-stats">
+            <div className="stat-item"><div className="stat-label">Market Cap</div><div className="stat-value">{formatCap(fundamentals?.market_cap)}</div></div>
+            <div className="stat-item"><div className="stat-label">CMP</div><div className="stat-value">{formatPrice(fundamentals?.current_price)}</div></div>
+            {fundamentals?.pChange != null && (
+              <div className="stat-item">
+                <div className="stat-label">Change</div>
+                <div className="stat-value" style={{ color: fundamentals.pChange > 0 ? 'var(--green)' : fundamentals.pChange < 0 ? 'var(--red)' : 'var(--muted)' }}>
+                  {fundamentals.pChange > 0 ? '+' : ''}{fundamentals.pChange}%
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <button
+            className="btn-outline"
+            style={{width:'170px', padding:'8px', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px'}}
+            onClick={handleRefreshPrice}
+            disabled={refreshingPrice}
+          >
+            {refreshingPrice ? '↻ Updating...' : '💰 Refresh Price'}
+          </button>
+          <button
+            className="btn-outline"
+            style={{width:'170px', padding:'8px', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px'}}
+            onClick={handleRefreshFundamentals}
+            disabled={refreshingFundamentals}
+          >
+            {refreshingFundamentals ? '↻ Updating...' : '📊 Refresh Fundamentals'}
+          </button>
+          <button className={isWatched ? 'save-btn' : 'btn-outline'} style={{width:'170px',padding:'8px'}} onClick={handleWatchlistToggle}>
+            {isWatched ? '★ Watchlisted' : '☆ Watch'}
+          </button>
+          <button className="btn-outline" style={{width:'170px'}} onClick={() => navigate('/journal')}>+ Add to Journal</button>
+        </div>
+      </div>
+
+      {fundamentals && (
+        <div className="fundamentals">
+          <div className="fund-card">
+            <div className="fund-label">P/E Ratio <span className="fund-tooltip">?</span></div>
+            <div className="fund-value">{formatRatio(fundamentals.pe_ratio)}</div>
+          </div>
+          <div className="fund-card">
+            <div className="fund-label">ROE <span className="fund-tooltip">?</span></div>
+            <div className="fund-value">{formatPercent(fundamentals.roe)}</div>
+          </div>
+          <div className="fund-card">
+            <div className="fund-label">Revenue Growth <span className="fund-tooltip">?</span></div>
+            <div className="fund-value">{formatPercent(fundamentals.revenue_growth)}</div>
+          </div>
+          <div className="fund-card">
+            <div className="fund-label">Debt/Equity <span className="fund-tooltip">?</span></div>
+            <div className="fund-value">{formatRatio(fundamentals.debt_to_equity)}</div>
+          </div>
+          <div className="fund-card">
+            <div className="fund-label">Net Margin <span className="fund-tooltip">?</span></div>
+            <div className="fund-value">{formatPercent(fundamentals.profit_margin)}</div>
+          </div>
+        </div>
+      )}
+
+      <div className="tabs">
+        {TABS.map(({ id, label }) => (
+          <div
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className={`tab ${activeTab === id ? 'active' : ''}`}
+          >
+            {label}
+          </div>
+        ))}
+      </div>
+
+      {activeTab === 'research' && (
+        <div className="tab-content active" id="tab-research">
+          <div style={{marginBottom: '20px', height: '400px'}}>
+            <TradingViewWidget ticker={company.ticker} exchange={company.exchange} />
+          </div>
+
+          <div className="research-layout">
+            <div className="chat-panel" style={{height: '600px'}}>
+              <ChatPanel companyId={companyId} documentId={selectedDocId} />
+            </div>
+
+            <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+              <div className="upload-panel">
+                <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>Documents</div>
+                
+                {documents.map((doc) => (
+                  <div 
+                    key={doc.id} 
+                    className="uploaded-doc" 
+                    style={selectedDocId === doc.id ? { borderColor: 'var(--accent)' } : { cursor: 'pointer' }}
+                    onClick={() => setSelectedDocId(doc.id)}
+                  >
+                    <div className="doc-icon">📄</div>
+                    <div>
+                      <div className="doc-name">{doc.filename}</div>
+                      <div className="doc-size">{doc.page_count} pages</div>
+                    </div>
+                    <div className="doc-status">✓ {doc.status}</div>
+                  </div>
+                ))}
+                
+                {selectedDocId && (
+                  <div style={{ fontSize: '12px', color: 'var(--accent)', marginTop: '4px' }}>
+                    Document selected for chat. The AI assistant will use this document to answer your questions.
+                  </div>
+                )}
+
+                <label className="upload-zone">
+                  <div className="upload-icon">⊕</div>
+                  <div className="upload-text">{uploading ? 'Uploading...' : 'Drop report here or browse'}</div>
+                  <input type="file" accept=".pdf" className="hidden" style={{display:'none'}} onChange={handleUpload} disabled={uploading} />
+                </label>
+                
+                <button
+                  onClick={handleAutoResearch}
+                  disabled={autoResearching}
+                  className="btn-outline"
+                  style={{width: '100%', marginTop: '8px'}}
+                >
+                  {autoResearching ? 'Researching...' : '✨ Auto Research'}
+                </button>
+              </div>
+
+              {agentResult?.news_summary && (
+                <div className="upload-panel">
+                   <div className="sq-title">AI News Summary</div>
+                   <div style={{fontSize: '12.5px', color: 'var(--sub)', lineHeight: '1.5'}}>
+                     <Markdown content={agentResult.news_summary} />
+                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'thesis' && (
+        <div className="tab-content active" id="tab-thesis">
+          {thesis?.updated_at && (
+            <div style={{
+              fontSize: '12px',
+              color: 'var(--muted)',
+              marginBottom: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}>
+              <span>⏱</span> Last saved: {formatDateTime(thesis.updated_at)}
+            </div>
+          )}
+          <ThesisForm
+            companyId={companyId}
+            existingThesis={thesis}
+            onSaved={() => loadCompanyData()}
+            documents={documents}
+          />
+        </div>
+      )}
+
+      {activeTab === 'notes' && (
+        <div className="tab-content active" id="tab-notes">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px' }}>
+            <div className="card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 600 }}>
+                  {selectedNoteId ? 'Edit Note' : 'New Research Note'} — {company.name}
+                </div>
+                {selectedNoteId && (
+                  <button
+                    className="btn-outline"
+                    style={{ padding: '4px 10px', fontSize: '12px', width: 'auto' }}
+                    onClick={() => {
+                      setSelectedNoteId(null)
+                      setNotes('')
+                    }}
+                  >
+                    ＋ Write New Note
+                  </button>
+                )}
+              </div>
+              <textarea
+                className="form-textarea"
+                style={{ minHeight: '240px', marginBottom: '14px' }}
+                placeholder="Add your personal notes here..."
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+              <button 
+                className="save-btn" 
+                style={{ width: 'auto', padding: '8px 20px' }} 
+                onClick={handleNoteSave}
+              >
+                {selectedNoteId ? 'Update Note →' : 'Save Note →'}
+              </button>
+            </div>
+
+            <div className="card" style={{ height: 'fit-content', maxHeight: '400px', overflowY: 'auto' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '14px' }}>Notes History</div>
+              {notesList.length === 0 ? (
+                <div style={{ color: 'var(--muted)', fontSize: '12.5px', textAlign: 'center', padding: '20px 0' }}>
+                  No saved notes.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {notesList.map((note) => {
+                    const words = note.content.trim().split(/\s+/)
+                    const firstFewWords = words.slice(0, 5).join(' ') + (words.length > 5 ? '...' : '')
+                    const displayTitle = firstFewWords || 'Empty note'
+                    const isEditingThis = selectedNoteId === note.id
+                    
+                    return (
+                      <div
+                        key={note.id}
+                        onClick={() => {
+                          setSelectedNoteId(note.id)
+                          setNotes(note.content)
+                        }}
+                        style={{
+                          padding: '10px',
+                          border: '1px solid var(--border)',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          background: isEditingThis ? 'rgba(59,130,246,0.1)' : 'var(--panel2)',
+                          borderColor: isEditingThis ? 'var(--accent)' : 'var(--border)',
+                          transition: 'all 0.15s'
+                        }}
+                        className="note-history-item"
+                      >
+                        <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px' }}>
+                          {displayTitle}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                          {formatDateTime(note.updated_at)}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
