@@ -1,12 +1,26 @@
-from mistralai.client import Mistral
+from langchain_mistralai import ChatMistralAI
 from app.config import settings
+from app.models.schemas import ReviewResult, ThesisDraft
 from typing import List, Dict, Optional
 from langsmith import traceable
-from langsmith.run_helpers import get_current_run_tree
 
-client = Mistral(api_key=settings.mistral_api_key)
 # We can use mistral-small-latest or open-mistral-nemo for fast RAG responses
 MODEL = "mistral-small-latest"
+
+# .with_retry() wraps every call with exponential backoff + jitter, retrying on any exception
+# (including 429s) up to 3 attempts total — Mistral calls previously had no retry handling at
+# all, unlike the yfinance retry-with-backoff pattern elsewhere in this codebase.
+_base_llm = ChatMistralAI(model=MODEL, api_key=settings.mistral_api_key, temperature=0.7)
+_retry_kwargs = dict(stop_after_attempt=3, wait_exponential_jitter=True)
+llm = _base_llm.with_retry(**_retry_kwargs)
+
+# Structured-output variants: these force the model to return data matching the given
+# Pydantic schema (via Mistral's native tool-calling), instead of us asking for "valid JSON"
+# in the prompt and then hand-parsing/repairing the response text.
+# with_structured_output() must be called on the base model (RunnableRetry doesn't expose it),
+# then the resulting runnable is wrapped with retry.
+review_llm = _base_llm.with_structured_output(ReviewResult).with_retry(**_retry_kwargs)
+draft_llm = _base_llm.with_structured_output(ThesisDraft).with_retry(**_retry_kwargs)
 
 RAG_SYSTEM_PROMPT = """You are an investment research assistant for StockSense.
 You help retail investors understand companies by answering questions about uploaded documents.
@@ -44,26 +58,22 @@ def build_context_string(chunks: List[Dict], web_results: List[Dict] = None) -> 
             )
     return "\n\n---\n\n".join(context_parts)
 
-@traceable(
-    name="Get RAG Answer",
-    run_type="llm",
-    metadata={"ls_provider": "mistral", "ls_model_name": MODEL}
-)
+@traceable(name="Get RAG Answer", run_type="chain")
 def get_rag_answer(question: str, chunks: List[Dict], history: List[dict] = None) -> str:
     """
-    Sends the question + retrieved chunks + recent history to Gemini Flash.
+    Sends the question + retrieved chunks + recent history to Mistral.
     Returns the model's answer string.
     """
     context = build_context_string(chunks)
-    
+
     # Take only the last 4 messages to prevent context exhaustion
     recent_history = ""
     if history:
-        last_few = history[-4:] 
+        last_few = history[-4:]
         for msg in last_few:
             role = "USER" if msg.get("role") == "user" else "ASSISTANT"
             recent_history += f"{role}: {msg.get('content', '')}\n"
-            
+
     prompt = f"""{RAG_SYSTEM_PROMPT}
 
 DOCUMENT EXCERPTS:
@@ -76,31 +86,15 @@ USER QUESTION: {question}
 
 ANSWER:"""
 
-    response = client.chat.complete(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-    # Log token usage to LangSmith
-    current_run = get_current_run_tree()
-    if current_run and response.usage:
-        current_run.set(usage_metadata={
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens
-        })
-        
-    return response.choices[0].message.content
+    response = llm.invoke(prompt)
+    return response.content
 
-@traceable(
-    name="Get Thesis Review",
-    run_type="llm",
-    metadata={"ls_provider": "mistral", "ls_model_name": MODEL}
-)
+@traceable(name="Get Thesis Review", run_type="chain")
 def get_thesis_review(thesis: Dict, chunks: List[Dict], web_results: List[Dict] = None) -> Dict:
     """
     Compares the user's thesis assumptions against retrieved document chunks and/or web search results.
-    Returns structured JSON matching the ReviewResult schema.
+    Returns a dict matching the ReviewResult schema, guaranteed valid by LangChain's structured output
+    (no more manual JSON parsing / code-fence stripping).
     """
     context = build_context_string(chunks, web_results)
 
@@ -118,49 +112,17 @@ Analyse each assumption in the thesis against the report and web evidence.
 For each assumption, determine status:
 - "supported": evidence in the report or web source confirms this assumption
 - "weakening": partial evidence or contradictory signals
-- "invalidated": report or web source clearly contradicts this assumption
+- "invalidated": report or web source clearly contradicts this assumption"""
 
-Respond ONLY with valid JSON in this exact format:
-{{
-  "summary": "2-3 sentence overall thesis health assessment",
-  "assumptions": [
-    {{
-      "assumption": "brief label of the assumption",
-      "status": "supported|weakening|invalidated",
-      "evidence": "specific evidence from context with page reference or web source title",
-      "source_page": <page number as integer, or null if from web search>
-    }}
-  ]
-}}"""
+    result: ReviewResult = review_llm.invoke(prompt)
+    return result.model_dump()
 
-    response = client.chat.complete(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-    # Log token usage to LangSmith
-    current_run = get_current_run_tree()
-    if current_run and response.usage:
-        current_run.set(usage_metadata={
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens
-        })
-        
-    import json
-    # Strip markdown code fences if present
-    text = response.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
-    return json.loads(text)
-
-@traceable(
-    name="Generate Thesis Draft",
-    run_type="llm",
-    metadata={"ls_provider": "mistral", "ls_model_name": MODEL}
-)
+@traceable(name="Generate Thesis Draft", run_type="chain")
 def generate_thesis_draft(chunks: List[Dict], web_results: List[Dict], company_name: str, ticker: str) -> Dict:
     """
     Generates an initial thesis draft (why_interested, key_risks, expected_outcomes)
-    based on document chunks and web search results.
+    based on document chunks and web search results. Returns a dict matching the ThesisDraft
+    schema, guaranteed valid by LangChain's structured output.
     """
     context = build_context_string(chunks, web_results)
 
@@ -170,59 +132,13 @@ Your task is to generate a draft investment thesis for {company_name} ({ticker})
 DOCUMENT EXCERPTS & WEB SEARCH CONTEXT:
 {context}
 
-Based on this context, draft an investment thesis containing three sections:
-1. "why_interested": Why a retail investor should be interested in this company (its competitive advantages, growth drivers, and market position).
-2. "key_risks": The main risks, headwinds, and threats identified for this company.
-3. "expected_outcomes": Realistic, expected operational/financial outcomes and indicators that will show if this thesis is playing out (e.g. revenue target, margin improvement, key milestones).
+Based on this context, draft an investment thesis containing three sections: why a retail investor
+should be interested, the main risks/headwinds, and realistic expected outcomes/milestones to track.
 
 STRICT RULES:
 1. Use ONLY the provided document excerpts and web search results. Do not speculate or invent numbers/milestones.
 2. Ground all points in direct facts from the context.
-3. Keep the tone professional, objective, and retail-investor-friendly.
-4. Respond ONLY with a valid JSON object in this exact format (no markdown code blocks, no trailing text):
-{{
-  "why_interested": "concise, bulleted points of the core opportunities and business drivers",
-  "key_risks": "concise, bulleted points of key risks and headwinds",
-  "expected_outcomes": "concise, bulleted list of milestones or indicators to track performance"
-}}"""
+3. Keep the tone professional, objective, and retail-investor-friendly."""
 
-    response = client.chat.complete(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-    # Log token usage to LangSmith
-    current_run = get_current_run_tree()
-    if current_run and response.usage:
-        current_run.set(usage_metadata={
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens
-        })
-        
-    import json
-    try:
-        text = response.choices[0].message.content.strip()
-        if "```" in text:
-            # extract content between code fences
-            parts = text.split("```")
-            for part in parts:
-                part_clean = part.strip()
-                if part_clean.startswith("json"):
-                    part_clean = part_clean[4:].strip()
-                if part_clean.startswith("{") and part_clean.endswith("}"):
-                    text = part_clean
-                    break
-        else:
-            # find first '{' and last '}'
-            start = text.find("{")
-            end = text.rfind("}")
-            if start != -1 and end != -1:
-                text = text[start:end+1]
-        return json.loads(text)
-    except Exception as e:
-        return {
-            "why_interested": "Failed to auto-draft. Please write manually.",
-            "key_risks": "Failed to auto-draft. Please write manually.",
-            "expected_outcomes": f"Error parsing LLM response: {str(e)}"
-        }
+    result: ThesisDraft = draft_llm.invoke(prompt)
+    return result.model_dump()

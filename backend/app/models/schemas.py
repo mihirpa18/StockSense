@@ -104,6 +104,12 @@ class ReviewResult(BaseModel):
     summary: str
     assumptions: List[AssumptionReview]
 
+class ThesisDraft(BaseModel):
+    why_interested: str
+    key_risks: str
+    expected_outcomes: str
+
+
 class NoteCreate(BaseModel):
     company_id: str
     content: str

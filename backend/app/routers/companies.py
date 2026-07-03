@@ -1,9 +1,11 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, Query, Depends
 from app.models.schemas import CompanyCreate
 from app.db.supabase import get_supabase
 from app.dependencies import get_current_user_id
 from app.services.market_data import fetch_fundamentals, fetch_price_only
 from app.services.auto_research_agent import run_auto_research
+from app.utils.logger import logger
 from pydantic import BaseModel as PydanticBaseModel
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
@@ -86,7 +88,7 @@ async def refresh_prices_bulk(req: BulkPriceRefreshReq, user_id: str = Depends(g
                 continue
 
             company = row.data
-            price_data = fetch_price_only(company["ticker"], company.get("exchange", "NSE"))
+            price_data = await asyncio.to_thread(fetch_price_only, company["ticker"], company.get("exchange", "NSE"))
 
             if price_data.get("current_price") is not None:
                 existing_cache = company.get("fundamentals_cache") or {}
@@ -101,7 +103,7 @@ async def refresh_prices_bulk(req: BulkPriceRefreshReq, user_id: str = Depends(g
             else:
                 results[cid] = company.get("fundamentals_cache") or {}
         except Exception as e:
-            print(f"Bulk price refresh error for {cid}: {e}")
+            logger.error(f"Bulk price refresh error for {cid}: {e}")
             results[cid] = {}
 
     return results
@@ -150,7 +152,7 @@ async def get_fundamentals(company_id: str):
         return fundamentals_cache
 
     # Fetch fresh data
-    fundamentals = fetch_fundamentals(ticker, exchange)
+    fundamentals = await asyncio.to_thread(fetch_fundamentals, ticker, exchange)
 
     if fundamentals and fundamentals.get("current_price") is not None:
         # Cache in DB
@@ -178,7 +180,7 @@ async def refresh_price(company_id: str):
         raise HTTPException(status_code=404, detail="Company not found")
 
     company = result.data
-    price_data = fetch_price_only(company["ticker"], company.get("exchange", "NSE"))
+    price_data = await asyncio.to_thread(fetch_price_only, company["ticker"], company.get("exchange", "NSE"))
 
     if price_data.get("current_price") is not None:
         # Merge price fields into existing cache (preserve fundamentals)
@@ -211,7 +213,7 @@ async def refresh_fundamentals(company_id: str):
         raise HTTPException(status_code=404, detail="Company not found")
 
     company = result.data
-    fundamentals = fetch_fundamentals(company["ticker"], company.get("exchange", "NSE"))
+    fundamentals = await asyncio.to_thread(fetch_fundamentals, company["ticker"], company.get("exchange", "NSE"))
 
     if fundamentals and fundamentals.get("current_price") is not None:
         supabase.table("companies").update({

@@ -3,6 +3,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from app.config import settings
+from app.utils.logger import logger
 
 security = HTTPBearer()
 
@@ -34,7 +35,7 @@ def get_jwk_by_kid(kid: str) -> dict:
                 if key.get("kid") == kid:
                     return key
     except Exception as e:
-        print(f"[JWT DEBUG] Dynamic JWKS fetch failed: {e}")
+        logger.warning(f"Dynamic JWKS fetch failed: {e}")
 
     # Fallback to local hardcoded key
     if kid == SUPABASE_JWK["kid"]:

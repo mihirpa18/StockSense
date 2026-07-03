@@ -2,6 +2,7 @@ import requests
 import yfinance as yf
 import time
 from typing import Dict, Optional
+from app.utils.logger import logger
 
 # The Node.js microservice runs locally on port 3000
 MARKET_SERVICE_URL = "http://localhost:3000"
@@ -38,20 +39,20 @@ def _fetch_yf_info(ticker: str, exchange: str = "NSE") -> Dict:
             if info and len(info) > 5:
                 return info
             else:
-                print(f"yfinance returned sparse data for {yf_symbol}, attempt {attempt + 1}")
+                logger.warning(f"yfinance returned sparse data for {yf_symbol}, attempt {attempt + 1}")
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "Too Many Requests" in err_str:
                 if attempt < YF_MAX_RETRIES:
                     wait = YF_BACKOFF_SECONDS[attempt]
-                    print(f"yfinance 429 for {yf_symbol}, retrying in {wait}s (attempt {attempt + 1}/{YF_MAX_RETRIES + 1})")
+                    logger.warning(f"yfinance 429 for {yf_symbol}, retrying in {wait}s (attempt {attempt + 1}/{YF_MAX_RETRIES + 1})")
                     time.sleep(wait)
                     continue
                 else:
-                    print(f"yfinance 429 for {yf_symbol}, all retries exhausted")
+                    logger.error(f"yfinance 429 for {yf_symbol}, all retries exhausted")
                     return {}
             else:
-                print(f"yfinance error for {yf_symbol}: {e}")
+                logger.error(f"yfinance error for {yf_symbol}: {e}")
                 return {}
     
     return {}
@@ -87,7 +88,7 @@ def fetch_fundamentals(ticker: str, exchange: str = "NSE") -> Dict:
                     "industry":           industry_info.get("industry"),
                 })
     except Exception as e:
-        print(f"Market service error for {ticker}: {e}")
+        logger.error(f"Market service error for {ticker}: {e}")
 
     # 2. Fetch deep fundamentals from yfinance (with retry on 429)
     info = _fetch_yf_info(ticker, exchange)
@@ -151,6 +152,6 @@ def fetch_price_only(ticker: str, exchange: str = "NSE") -> Dict:
                     "pChange":        price_info.get("pChange"),
                 }
     except Exception as e:
-        print(f"Price fetch error for {ticker}: {e}")
+        logger.error(f"Price fetch error for {ticker}: {e}")
 
     return result

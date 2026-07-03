@@ -30,18 +30,13 @@ from app.services.web_researcher import (
 from app.services.pdf_parser import extract_text_by_page
 from app.services.chunker import chunk_page_texts
 from app.services.embedder import get_embeddings_batch
-from app.services.llm import client, MODEL  # Mistral instance
+from app.services.llm import llm, MODEL  # shared ChatMistralAI instance
 from app.db.supabase import get_supabase
 from app.utils.logger import logger
 import uuid
 from langsmith import traceable
-from langsmith.run_helpers import get_current_run_tree
 
-@traceable(
-    name="Summarize News Snippets",
-    run_type="llm",
-    metadata={"ls_provider": "mistral", "ls_model_name": MODEL}
-)
+@traceable(name="Summarize News Snippets", run_type="chain")
 def summarize_news(company_name: str, ticker: str, news_text: str) -> str:
     summary_prompt = f"""You are an investment research assistant.
 Summarise the following recent news about {company_name} ({ticker}) for a retail investor.
@@ -52,21 +47,8 @@ NEWS SNIPPETS:
 {news_text}
 
 SUMMARY:"""
-    response = client.chat.complete(
-        model=MODEL,
-        messages=[{"role": "user", "content": summary_prompt}]
-    )
-    
-    # Log token usage to LangSmith
-    current_run = get_current_run_tree()
-    if current_run and response.usage:
-        current_run.set(usage_metadata={
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens
-        })
-        
-    return response.choices[0].message.content
+    response = llm.invoke(summary_prompt)
+    return response.content
 
 @traceable(name="Run Auto Research Agent", run_type="chain")
 async def run_auto_research(
@@ -101,8 +83,9 @@ async def run_auto_research(
                 for item in news_items[:6]
             ])
             try:
-                result["news_summary"] = summarize_news(company_name, ticker, news_text)
+                result["news_summary"] = await asyncio.to_thread(summarize_news, company_name, ticker, news_text)
             except Exception as e:
+                logger.warning(f"Auto-Research: news summary generation failed: {e}")
                 result["news_summary"] = "Could not generate news summary."
 
         logger.info(f"Auto-Research: Searching for annual report candidate PDFs...")
@@ -133,8 +116,8 @@ async def run_auto_research(
         }).execute()
 
         try:
-            pages  = extract_text_by_page(pdf_bytes)
-            chunks = chunk_page_texts(pages)
+            pages  = await asyncio.to_thread(extract_text_by_page, pdf_bytes)
+            chunks = await asyncio.to_thread(chunk_page_texts, pages)
 
             chunk_rows = []
             BATCH_SIZE = 64
@@ -145,7 +128,7 @@ async def run_auto_research(
                 batch_texts = [c["content"] for c in batch_chunks]
                 
                 # Fetch embeddings for the whole batch in one API call
-                embeddings = get_embeddings_batch(batch_texts)
+                embeddings = await asyncio.to_thread(get_embeddings_batch, batch_texts)
                 
                 for chunk, embedding in zip(batch_chunks, embeddings):
                     chunk_rows.append({

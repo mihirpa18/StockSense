@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from app.services.retriever import retrieve_relevant_chunks
 from app.services.llm import get_rag_answer
@@ -33,7 +34,8 @@ async def chat(request: ChatRequest, user_id: str = Depends(get_current_user_id)
     # Step 1: Retrieve relevant chunks via cosine similarity
     # If document_id is provided, scope search to that document only.
     # This prevents cross-document contamination when multiple reports are uploaded.
-    chunks = retrieve_relevant_chunks(
+    chunks = await asyncio.to_thread(
+        retrieve_relevant_chunks,
         question=request.question,
         company_id=request.company_id,
         user_id=user_id,
@@ -50,8 +52,8 @@ async def chat(request: ChatRequest, user_id: str = Depends(get_current_user_id)
             session_id=session_id
         )
 
-    # Step 2: Get AI answer from Gemini using retrieved chunks and sliding window history
-    answer = get_rag_answer(request.question, chunks, request.conversation_history)
+    # Step 2: Get AI answer from Mistral using retrieved chunks and sliding window history
+    answer = await asyncio.to_thread(get_rag_answer, request.question, chunks, request.conversation_history)
 
     # Step 3: Build citation objects from retrieved chunks
     citations = [

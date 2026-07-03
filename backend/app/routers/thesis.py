@@ -1,7 +1,9 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from app.models.schemas import ThesisCreate, ThesisResponse
 from app.db.supabase import get_supabase
 from app.dependencies import get_current_user_id
+from app.utils.logger import logger
 from typing import Optional
 
 router = APIRouter()
@@ -102,7 +104,8 @@ async def review_thesis(
     if mode in ["document", "hybrid"]:
         # Pull representative chunks from the SELECTED document ONLY
         review_query = f"{thesis['why_interested']} {thesis['expected_outcomes']}"
-        chunks = retrieve_relevant_chunks(
+        chunks = await asyncio.to_thread(
+            retrieve_relevant_chunks,
             review_query,
             doc["company_id"],
             user_id,
@@ -118,10 +121,10 @@ async def review_thesis(
 
     web_results = []
     if mode in ["web", "hybrid"]:
-        web_results = search_web(search_query, max_results=5)
+        web_results = await asyncio.to_thread(search_web, search_query, max_results=5)
 
     # Get AI review
-    review_result = get_thesis_review(thesis, chunks, web_results)
+    review_result = await asyncio.to_thread(get_thesis_review, thesis, chunks, web_results)
 
     # Save review result (skip for web-only mode)
     if mode != "web":
@@ -177,32 +180,46 @@ async def auto_draft_thesis(
     
     all_chunks = []
     seen_chunk_ids = set()
-    
-    for q in queries:
-        chunks = retrieve_relevant_chunks(
+
+    # The 3 queries are independent, so run them concurrently in threads instead of
+    # blocking the event loop 3x in a row.
+    results_per_query = await asyncio.gather(*[
+        asyncio.to_thread(
+            retrieve_relevant_chunks,
             question=q,
             company_id=company_id,
             user_id=user_id,
             document_id=document_id
         )
+        for q in queries
+    ])
+    for chunks in results_per_query:
         for chunk in chunks:
             if chunk["id"] not in seen_chunk_ids:
                 seen_chunk_ids.add(chunk["id"])
                 all_chunks.append(chunk)
-                
+
     # 4. Web search (best-effort)
     from app.services.web_researcher import search_web
     web_results = []
     try:
         search_query = f"{name} {ticker} stock analysis growth risks outlook"
-        web_results = search_web(search_query, max_results=5)
+        web_results = await asyncio.to_thread(search_web, search_query, max_results=5)
     except Exception as e:
         # best effort, ignore search failure
-        print(f"Auto-draft web search ignored error: {e}")
-        
+        logger.warning(f"Auto-draft web search ignored error: {e}")
+
     # 5. LLM draft -> returns {why_interested, key_risks, expected_outcomes}
     from app.services.llm import generate_thesis_draft
-    draft = generate_thesis_draft(all_chunks, web_results, name, ticker)
-    
+    try:
+        draft = await asyncio.to_thread(generate_thesis_draft, all_chunks, web_results, name, ticker)
+    except Exception as e:
+        # With structured output this should be rare (schema validity is enforced by the
+        # model call itself), but a network/auth/API error can still raise. Surface it as a
+        # clean error instead of an opaque 500 — this replaces the old behavior where
+        # generate_thesis_draft silently returned a "Failed to auto-draft" placeholder dict.
+        logger.error(f"Auto-draft LLM generation failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to auto-draft thesis: {str(e)}")
+
     return draft
 

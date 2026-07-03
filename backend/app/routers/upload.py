@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from app.services.pdf_parser import extract_text_by_page
 from app.services.chunker import chunk_page_texts
@@ -49,24 +50,26 @@ async def upload_document(
     }).execute()
 
     try:
-        # Step 2: Parse PDF into pages
-        pages = extract_text_by_page(pdf_bytes)
+        # Step 2: Parse PDF into pages (CPU-bound; runs in a thread so it doesn't block
+        # other requests being served by this worker while a large PDF is parsed)
+        pages = await asyncio.to_thread(extract_text_by_page, pdf_bytes)
 
-        # Step 3: Chunk the pages
-        chunks = chunk_page_texts(pages)
-
-        import asyncio
+        # Step 3: Chunk the pages (also CPU-bound — tokenization over the whole document)
+        chunks = await asyncio.to_thread(chunk_page_texts, pages)
 
         # Step 4: Embed each chunk and store
-        # Batch into groups of 100 to avoid Gemini RPM limits
+        # Batch into groups of 100 to avoid Mistral RPM limits
         chunk_rows = []
         batch_size = 100
         for i in range(0, len(chunks), batch_size):
             batch_chunks = chunks[i:i + batch_size]
             batch_texts = [c["content"] for c in batch_chunks]
-            
-            # Get embeddings for the whole batch in one API call
-            embeddings = get_embeddings_batch(batch_texts)
+
+            # Get embeddings for the whole batch in one API call.
+            # get_embeddings_batch is a blocking network call — run it in a thread so it
+            # doesn't stall the event loop (and therefore every other in-flight request)
+            # for however long the Mistral call takes.
+            embeddings = await asyncio.to_thread(get_embeddings_batch, batch_texts)
             
             for chunk, embedding in zip(batch_chunks, embeddings):
                 chunk_rows.append({

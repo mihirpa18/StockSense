@@ -133,7 +133,7 @@ async def fetch_company_news(company_name: str, ticker: str) -> List[Dict]:
     for i, query in enumerate(queries):
         if i > 0:
             await asyncio.sleep(2.0)  # Avoid DDG rate limiting
-        results = search_web(query, max_results=5)
+        results = await asyncio.to_thread(search_web, query, max_results=5)
         all_results.extend(results)
 
     # Deduplicate by URL
@@ -162,7 +162,7 @@ async def find_annual_report_links(company_name: str, ticker: str) -> List[str]:
     for i, query in enumerate(search_queries):
         if i > 0:
             await asyncio.sleep(2.0)
-        results = search_web(query, max_results=5)
+        results = await asyncio.to_thread(search_web, query, max_results=5)
         for result in results:
             url = result.get("url", "")
             if url and url not in seen:
@@ -173,7 +173,9 @@ async def find_annual_report_links(company_name: str, ticker: str) -> List[str]:
     # Fallback if the strict query finds nothing, try a slightly broader one
     if not urls:
         await asyncio.sleep(2.0)
-        results = search_web(f"{company_name} {ticker} annual report investor presentation filetype:pdf", max_results=3)
+        results = await asyncio.to_thread(
+            search_web, f"{company_name} {ticker} annual report investor presentation filetype:pdf", max_results=3
+        )
         for result in results:
             url = result.get("url", "")
             if url and url not in seen and (url.endswith(".pdf") or "pdf" in url.lower()):
