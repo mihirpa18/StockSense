@@ -1,5 +1,5 @@
-from pydantic import BaseModel, UUID4
-from typing import Optional, List
+from pydantic import BaseModel, UUID4, Field
+from typing import Optional, List, Literal
 from datetime import datetime, date
 from enum import Enum
 
@@ -95,20 +95,29 @@ class CompanyCreate(BaseModel):
     description: Optional[str] = None
 
 class AssumptionReview(BaseModel):
-    assumption: str
-    status: str             # "supported" | "weakening" | "invalidated"
-    evidence: str
-    source_page: Optional[int] = None
+    assumption: str = Field(description="Brief label of the thesis assumption being evaluated")
+    status: Literal["supported", "weakening", "invalidated"] = Field(
+        description="'supported' if evidence confirms the assumption, 'weakening' if evidence is "
+                    "partial/contradictory, 'invalidated' if evidence clearly contradicts it"
+    )
+    evidence: str = Field(description="Specific evidence from context, with page reference or web source title")
+    source_page: Optional[int] = Field(default=None, description="Page number, or null if from web search")
 
 class ReviewResult(BaseModel):
-    summary: str
+    """Structured output schema for LLM thesis-review calls (used with LangChain's with_structured_output)."""
+    summary: str = Field(description="2-3 sentence overall thesis health assessment")
     assumptions: List[AssumptionReview]
 
 class ThesisDraft(BaseModel):
-    why_interested: str
-    key_risks: str
-    expected_outcomes: str
-
+    """Structured output schema for LLM auto-draft calls (used with LangChain's with_structured_output)."""
+    why_interested: str = Field(
+        description="Concise, bulleted points on why a retail investor should be interested: "
+                     "competitive advantages, growth drivers, market position"
+    )
+    key_risks: str = Field(description="Concise, bulleted points on key risks, headwinds, and threats")
+    expected_outcomes: str = Field(
+        description="Concise, bulleted list of realistic milestones/indicators to track whether the thesis is playing out"
+    )
 
 class NoteCreate(BaseModel):
     company_id: str

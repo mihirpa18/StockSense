@@ -1,24 +1,20 @@
-from langchain_mistralai import ChatMistralAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from app.config import settings
 from app.models.schemas import ReviewResult, ThesisDraft
 from typing import List, Dict, Optional
 from langsmith import traceable
 
-# We can use mistral-small-latest or open-mistral-nemo for fast RAG responses
-MODEL = "mistral-small-latest"
+# We can use gemini-2.5-flash for fast RAG responses
+MODEL = "gemini-2.5-flash"
 
 # .with_retry() wraps every call with exponential backoff + jitter, retrying on any exception
-# (including 429s) up to 3 attempts total — Mistral calls previously had no retry handling at
-# all, unlike the yfinance retry-with-backoff pattern elsewhere in this codebase.
-_base_llm = ChatMistralAI(model=MODEL, api_key=settings.mistral_api_key, temperature=0.7)
+# (including 429s) up to 3 attempts total.
+_base_llm = ChatGoogleGenerativeAI(model=MODEL, google_api_key=settings.gemini_api_key, temperature=0.7)
 _retry_kwargs = dict(stop_after_attempt=3, wait_exponential_jitter=True)
 llm = _base_llm.with_retry(**_retry_kwargs)
 
 # Structured-output variants: these force the model to return data matching the given
-# Pydantic schema (via Mistral's native tool-calling), instead of us asking for "valid JSON"
-# in the prompt and then hand-parsing/repairing the response text.
-# with_structured_output() must be called on the base model (RunnableRetry doesn't expose it),
-# then the resulting runnable is wrapped with retry.
+# Pydantic schema (via Gemini's native tool-calling).
 review_llm = _base_llm.with_structured_output(ReviewResult).with_retry(**_retry_kwargs)
 draft_llm = _base_llm.with_structured_output(ThesisDraft).with_retry(**_retry_kwargs)
 

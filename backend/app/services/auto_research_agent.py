@@ -30,7 +30,7 @@ from app.services.web_researcher import (
 from app.services.pdf_parser import extract_text_by_page
 from app.services.chunker import chunk_page_texts
 from app.services.embedder import get_embeddings_batch
-from app.services.llm import llm, MODEL  # shared ChatMistralAI instance
+from app.services.llm import llm, MODEL  
 from app.db.supabase import get_supabase
 from app.utils.logger import logger
 import uuid
