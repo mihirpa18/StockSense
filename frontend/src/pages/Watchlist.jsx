@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getWatchlist, removeFromWatchlist, refreshPricesBulk } from '../lib/api'
 import toast from 'react-hot-toast'
+import { RefreshCw, X } from 'lucide-react'
 
 export default function Watchlist() {
   const navigate = useNavigate()
@@ -38,7 +39,7 @@ export default function Watchlist() {
         {watchlist.length > 0 && (
           <button
             className="btn-outline"
-            style={{padding:'6px 14px', fontSize:'12px', borderRadius:'6px'}}
+            style={{padding:'6px 14px', fontSize:'12px', borderRadius:'6px', display:'inline-flex', alignItems:'center', gap:'6px'}}
             disabled={refreshingPrices}
             onClick={async () => {
               setRefreshingPrices(true)
@@ -61,7 +62,7 @@ export default function Watchlist() {
               }
             }}
           >
-            {refreshingPrices ? '↻ Refreshing...' : '🔄 Refresh Prices'}
+            <RefreshCw size={12} className={refreshingPrices ? 'spin' : ''} /> {refreshingPrices ? 'Refreshing...' : 'Refresh Prices'}
           </button>
         )}
       </div>
@@ -85,9 +86,9 @@ export default function Watchlist() {
                   <div style={{fontWeight:700}}>{c.name}</div>
                   <button 
                     onClick={(e) => handleRemove(c.id, e)}
-                    style={{background:'transparent', border:'none', color:'var(--muted)', cursor:'pointer'}}
+                    style={{background:'transparent', border:'none', color:'var(--muted)', cursor:'pointer', display:'flex', alignItems:'center'}}
                   >
-                    ×
+                    <X size={15} />
                   </button>
                 </div>
                 <div style={{fontFamily:'var(--mono)',fontSize:'20px',marginBottom:'4px'}}>

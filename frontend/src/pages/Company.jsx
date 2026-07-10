@@ -21,12 +21,17 @@ import ThesisForm from '../components/thesis/ThesisForm'
 import TradingViewWidget from '../components/TradingViewWidget'
 import Markdown from '../components/ui/Markdown'
 import toast from 'react-hot-toast'
+import {
+  FlaskConical, BarChart3, ClipboardList, FileEdit,
+  Star, IndianRupee, RefreshCw, Sparkles, Building2, Newspaper,
+  FileText, CheckCircle2, UploadCloud, Plus, Clock
+} from 'lucide-react'
 
 const TABS = [
-  { id: 'research',    label: '🔬 AI Research' },
-  { id: 'financials',  label: '📊 Financials' },
-  { id: 'thesis',      label: '📋 Thesis Builder' },
-  { id: 'notes',       label: '📝 Notes' },
+  { id: 'research',    label: 'AI Research',    icon: FlaskConical },
+  { id: 'financials',  label: 'Financials',      icon: BarChart3 },
+  { id: 'thesis',      label: 'Thesis Builder',  icon: ClipboardList },
+  { id: 'notes',       label: 'Notes',           icon: FileEdit },
 ]
 
 export default function Company() {
@@ -318,7 +323,7 @@ export default function Company() {
             onClick={handleRefreshPrice}
             disabled={refreshingPrice}
           >
-            {refreshingPrice ? '↻ Updating...' : '💰 Refresh Price'}
+            {refreshingPrice ? <><RefreshCw size={13} className="spin" /> Updating...</> : <><IndianRupee size={13} /> Refresh Price</>}
           </button>
           <button
             className="btn-outline"
@@ -326,12 +331,12 @@ export default function Company() {
             onClick={handleRefreshFundamentals}
             disabled={refreshingFundamentals}
           >
-            {refreshingFundamentals ? '↻ Updating...' : '📊 Refresh Fundamentals'}
+            {refreshingFundamentals ? <><RefreshCw size={13} className="spin" /> Updating...</> : <><BarChart3 size={13} /> Refresh Fundamentals</>}
           </button>
-          <button className={isWatched ? 'save-btn' : 'btn-outline'} style={{width:'170px',padding:'8px'}} onClick={handleWatchlistToggle}>
-            {isWatched ? '★ Watchlisted' : '☆ Watch'}
+          <button className={isWatched ? 'save-btn' : 'btn-outline'} style={{width:'170px',padding:'8px', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px'}} onClick={handleWatchlistToggle}>
+            <Star size={13} fill={isWatched ? 'currentColor' : 'none'} /> {isWatched ? 'Watchlisted' : 'Watch'}
           </button>
-          <button className="btn-outline" style={{width:'170px'}} onClick={() => navigate('/journal')}>+ Add to Journal</button>
+          <button className="btn-outline" style={{width:'170px', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px'}} onClick={() => navigate('/journal')}><Plus size={13} /> Add to Journal</button>
         </div>
       </div>
 
@@ -364,7 +369,7 @@ export default function Company() {
         <div className="about-news-row">
           {fundamentals?.about && (
             <div className="card">
-              <div className="section-title">🏢 About</div>
+              <div className="section-title"><Building2 size={15} /> About</div>
               <div className="about-grid">
                 <div>
                   <div className="about-label">CEO</div>
@@ -388,7 +393,7 @@ export default function Company() {
 
           {fundamentals?.news?.length > 0 && (
             <div className="card">
-              <div className="section-title">📰 Recent News</div>
+              <div className="section-title"><Newspaper size={15} /> Recent News</div>
               {fundamentals.news.map((item, i) => (
                 <a
                   key={i}
@@ -409,13 +414,13 @@ export default function Company() {
       )}
 
       <div className="tabs">
-        {TABS.map(({ id, label }) => (
+        {TABS.map(({ id, label, icon: Icon }) => (
           <div
             key={id}
             onClick={() => setActiveTab(id)}
             className={`tab ${activeTab === id ? 'active' : ''}`}
           >
-            {label}
+            <Icon size={14} /> {label}
           </div>
         ))}
       </div>
@@ -442,12 +447,12 @@ export default function Company() {
                     style={selectedDocId === doc.id ? { borderColor: 'var(--accent)' } : { cursor: 'pointer' }}
                     onClick={() => setSelectedDocId(doc.id)}
                   >
-                    <div className="doc-icon">📄</div>
+                    <div className="doc-icon"><FileText size={16} /></div>
                     <div>
                       <div className="doc-name">{doc.filename}</div>
                       <div className="doc-size">{doc.page_count} pages</div>
                     </div>
-                    <div className="doc-status">✓ {doc.status}</div>
+                    <div className="doc-status"><CheckCircle2 size={11} /> {doc.status}</div>
                   </div>
                 ))}
                 
@@ -458,7 +463,7 @@ export default function Company() {
                 )}
 
                 <label className="upload-zone">
-                  <div className="upload-icon">⊕</div>
+                  <div className="upload-icon"><UploadCloud size={22} /></div>
                   <div className="upload-text">{uploading ? 'Uploading...' : 'Drop report here or browse'}</div>
                   <input type="file" accept=".pdf" className="hidden" style={{display:'none'}} onChange={handleUpload} disabled={uploading} />
                 </label>
@@ -467,9 +472,9 @@ export default function Company() {
                   onClick={handleAutoResearch}
                   disabled={autoResearching}
                   className="btn-outline"
-                  style={{width: '100%', marginTop: '8px'}}
+                  style={{width: '100%', marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'}}
                 >
-                  {autoResearching ? 'Researching...' : '✨ Auto Research'}
+                  {autoResearching ? 'Researching...' : <><Sparkles size={13} /> Auto Research</>}
                 </button>
               </div>
 
@@ -506,11 +511,11 @@ export default function Company() {
                     </div>
                     <button
                       className="btn-outline"
-                      style={{ width: 'auto', padding: '8px 20px', margin: '0 auto' }}
+                      style={{ width: 'auto', padding: '8px 20px', margin: '0 auto', display: 'flex', alignItems: 'center', gap: '6px' }}
                       onClick={handleRefreshFundamentals}
                       disabled={refreshingFundamentals}
                     >
-                      {refreshingFundamentals ? '↻ Fetching...' : '📊 Fetch Financials'}
+                      {refreshingFundamentals ? <><RefreshCw size={13} className="spin" /> Fetching...</> : <><BarChart3 size={13} /> Fetch Financials</>}
                     </button>
                   </div>
                 )
@@ -567,6 +572,7 @@ export default function Company() {
                     ))}
                   </div>
 
+                  <div className="fin-table-scroll">
                   <table className="fin-table">
                     <thead>
                       <tr>
@@ -589,6 +595,7 @@ export default function Company() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </>
               )
             })()}
@@ -607,7 +614,7 @@ export default function Company() {
               alignItems: 'center',
               gap: '6px'
             }}>
-              <span>⏱</span> Last saved: {formatDateTime(thesis.updated_at)}
+              <Clock size={12} /> Last saved: {formatDateTime(thesis.updated_at)}
             </div>
           )}
           <ThesisForm
@@ -621,7 +628,7 @@ export default function Company() {
 
       {activeTab === 'notes' && (
         <div className="tab-content active" id="tab-notes">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px' }}>
+          <div className="notes-layout">
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div style={{ fontSize: '13px', fontWeight: 600 }}>
@@ -630,13 +637,13 @@ export default function Company() {
                 {selectedNoteId && (
                   <button
                     className="btn-outline"
-                    style={{ padding: '4px 10px', fontSize: '12px', width: 'auto' }}
+                    style={{ padding: '4px 10px', fontSize: '12px', width: 'auto', display: 'flex', alignItems: 'center', gap: '5px' }}
                     onClick={() => {
                       setSelectedNoteId(null)
                       setNotes('')
                     }}
                   >
-                    ＋ Write New Note
+                    <Plus size={12} /> Write New Note
                   </button>
                 )}
               </div>
@@ -682,7 +689,7 @@ export default function Company() {
                           border: '1px solid var(--border)',
                           borderRadius: '6px',
                           cursor: 'pointer',
-                          background: isEditingThis ? 'rgba(59,130,246,0.1)' : 'var(--panel2)',
+                          background: isEditingThis ? 'rgba(var(--accent-rgb),0.1)' : 'var(--panel2)',
                           borderColor: isEditingThis ? 'var(--accent)' : 'var(--border)',
                           transition: 'all 0.15s'
                         }}

@@ -4,6 +4,7 @@ import { getWatchlist, getJournalEntries, refreshPricesBulk } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import toast from 'react-hot-toast'
+import { RefreshCw, NotebookText } from 'lucide-react'
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -50,7 +51,7 @@ export default function Dashboard() {
 
   return (
     <div className="view active">
-      <div className="page-title">Good morning{user?.user_metadata?.full_name ? `, ${user.user_metadata.full_name.split(' ')[0]}` : ''} 👋</div>
+      <div className="page-title">Good morning{user?.user_metadata?.full_name ? `, ${user.user_metadata.full_name.split(' ')[0]}` : ''}</div>
       <div className="page-sub">You have {thesisCount} active theses.</div>
 
       <div className="grid-3">
@@ -81,7 +82,6 @@ export default function Dashboard() {
             {watchlist.length > 0 && (
               <button
                 className="btn-outline"
-                style={{padding:'4px 12px', fontSize:'11px', borderRadius:'6px'}}
                 disabled={refreshingPrices}
                 onClick={async () => {
                   setRefreshingPrices(true)
@@ -103,8 +103,9 @@ export default function Dashboard() {
                     setRefreshingPrices(false)
                   }
                 }}
+                style={{padding:'4px 12px', fontSize:'11px', borderRadius:'6px', display:'inline-flex', alignItems:'center', gap:'5px'}}
               >
-                {refreshingPrices ? '↻ ...' : '🔄 Refresh Prices'}
+                <RefreshCw size={11} className={refreshingPrices ? 'spin' : ''} /> {refreshingPrices ? 'Refreshing...' : 'Refresh Prices'}
               </button>
             )}
           </div>
@@ -136,7 +137,7 @@ export default function Dashboard() {
           <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
             {recentJournal.map(entry => (
               <div key={entry.id} style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
-                <div style={{width:'32px',height:'32px',borderRadius:'8px',background:'rgba(139,92,246,0.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',flexShrink:0}}>📓</div>
+                <div style={{width:'32px',height:'32px',borderRadius:'8px',background:'rgba(var(--accent-rgb),0.15)',color:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><NotebookText size={15} /></div>
                 <div>
                   <div style={{fontSize:'13px',fontWeight:500}}>Journal entry — {entry.action} {entry.stock_name}</div>
                   <div style={{fontSize:'11px',color:'var(--muted)',marginTop:'2px'}}>{new Date(entry.purchase_date).toLocaleDateString()} · ₹{entry.price} entry price</div>

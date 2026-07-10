@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { sendChat, getChatSessions, getChatHistory } from '../../lib/api'
 import Markdown from '../ui/Markdown'
+import { Plus, History, Send } from 'lucide-react'
 
 export default function ChatPanel({ companyId, documentId }) {
   const [messages, setMessages] = useState([])
@@ -158,7 +159,7 @@ export default function ChatPanel({ companyId, documentId }) {
             onClick={startNewChat}
             title="New chat"
           >
-            ＋
+            <Plus size={13} />
           </button>
           <button
             className={`chat-session-btn ${showSessions ? 'active' : ''}`}
@@ -168,7 +169,7 @@ export default function ChatPanel({ companyId, documentId }) {
             }}
             title="Chat history"
           >
-            🕘
+            <History size={13} />
           </button>
         </div>
 
@@ -252,7 +253,7 @@ export default function ChatPanel({ companyId, documentId }) {
             }
           }}
         />
-        <button className="send-btn" onClick={() => handleSend()}>↑</button>
+        <button className="send-btn" onClick={() => handleSend()}><Send size={15} /></button>
       </div>
     </div>
   )

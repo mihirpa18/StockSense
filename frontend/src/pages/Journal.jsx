@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { saveJournalEntry, getJournalEntries, searchCompanies } from '../lib/api'
 import toast from 'react-hot-toast'
+import { Gauge } from 'lucide-react'
 
 const HORIZONS = [
   { label: '6 Months', value: '6M' },
@@ -86,7 +87,7 @@ export default function Journal() {
       <div className="page-title">Decision Journal</div>
       <div className="page-sub">Record your investment decisions. Future you will thank present you.</div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 380px',gap:'20px'}}>
+      <div className="journal-layout">
         <div>
           {entries.length === 0 ? (
             <div style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>No entries yet.</div>
@@ -112,7 +113,7 @@ export default function Journal() {
                   <div className="journal-section-text">{entry.risks_identified}</div>
                 </div>
                 <div className="journal-footer">
-                  <div className="confidence-badge">⬡ {entry.confidence}/10 confidence</div>
+                  <div className="confidence-badge"><Gauge size={12} /> {entry.confidence}/10 confidence</div>
                   <div className="tag">{horizonLabels[entry.horizon] || entry.horizon} horizon</div>
                   {entry.quantity && <div className="tag">Qty: {entry.quantity}</div>}
                 </div>
@@ -138,7 +139,7 @@ export default function Journal() {
             )}
           </div>
 
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+          <div className="form-row-2">
             <div className="form-group">
               <label className="form-label">Buy Price (₹)</label>
               <input className="form-input" type="number" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} />

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { useAuth } from './hooks/useAuth'
@@ -13,12 +14,13 @@ import AuthPage from './pages/Auth'
 import { LiquidBackground } from './components/ui/LiquidBackground'
 
 function AppShell({ children }) {
+  const [navOpen, setNavOpen] = useState(false)
   return (
     <>
       <LiquidBackground />
-      <Sidebar />
+      <Sidebar isOpen={navOpen} onClose={() => setNavOpen(false)} />
       <div className="main">
-        <Topbar />
+        <Topbar onMenuClick={() => setNavOpen(true)} />
         <div className="content">
           {children}
         </div>

@@ -3,6 +3,7 @@ import { getWatchlist, getThesis, reviewThesis } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import toast from 'react-hot-toast'
+import { Check, AlertTriangle, X } from 'lucide-react'
 
 export default function ThesisReview() {
   const { user } = useAuth()
@@ -163,7 +164,7 @@ export default function ThesisReview() {
                 <div key={i} className="review-card">
                    <div className="review-header">
                      <div className={`review-status ${a.status === 'supported' ? 'status-ok' : a.status === 'weakening' ? 'status-warn' : 'status-bad'}`}>
-                       {a.status === 'supported' ? '✓' : a.status === 'weakening' ? '⚠' : '✗'}
+                       {a.status === 'supported' ? <Check size={14} /> : a.status === 'weakening' ? <AlertTriangle size={13} /> : <X size={14} />}
                      </div>
                      <div className="review-assumption">{a.assumption}</div>
                    </div>

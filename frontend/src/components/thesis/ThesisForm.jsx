@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { saveThesis, autoDraftThesis } from '../../lib/api'
 import toast from 'react-hot-toast'
+import { Sparkles } from 'lucide-react'
 
 const HORIZONS = [
   { label: '6 Months', value: '6M' },
@@ -136,11 +137,11 @@ export default function ThesisForm({ companyId, existingThesis, onSaved, documen
           </div>
           <button 
             className="save-btn" 
-            style={{ width: 'auto', padding: '10px 20px', height: '38px', whiteSpace: 'nowrap' }} 
+            style={{ width: 'auto', padding: '10px 20px', height: '38px', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '6px' }} 
             onClick={handleAutoFill}
             disabled={readyDocs.length === 0 || drafting}
           >
-            {drafting ? 'Generating Draft...' : '✨ Auto-fill'}
+            {drafting ? 'Generating Draft...' : <><Sparkles size={14} /> Auto-fill</>}
           </button>
         </div>
 
