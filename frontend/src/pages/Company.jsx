@@ -23,9 +23,10 @@ import Markdown from '../components/ui/Markdown'
 import toast from 'react-hot-toast'
 
 const TABS = [
-  { id: 'research', label: '🔬 AI Research' },
-  { id: 'thesis',   label: '📋 Thesis Builder' },
-  { id: 'notes',    label: '📝 Notes' },
+  { id: 'research',    label: '🔬 AI Research' },
+  { id: 'financials',  label: '📊 Financials' },
+  { id: 'thesis',      label: '📋 Thesis Builder' },
+  { id: 'notes',       label: '📝 Notes' },
 ]
 
 export default function Company() {
@@ -49,6 +50,7 @@ export default function Company() {
   const [loading, setLoading] = useState(true)
   const [refreshingPrice, setRefreshingPrice] = useState(false)
   const [refreshingFundamentals, setRefreshingFundamentals] = useState(false)
+  const [financialsPeriod, setFinancialsPeriod] = useState('annual')
 
   useEffect(() => {
     if (companyId && user?.id) {
@@ -358,6 +360,54 @@ export default function Company() {
         </div>
       )}
 
+      {(fundamentals?.about || fundamentals?.news?.length > 0) && (
+        <div className="about-news-row">
+          {fundamentals?.about && (
+            <div className="card">
+              <div className="section-title">🏢 About</div>
+              <div className="about-grid">
+                <div>
+                  <div className="about-label">CEO</div>
+                  <div className="about-value">{fundamentals.about.ceo || 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="about-label">Founded</div>
+                  <div className="about-value">{fundamentals.about.founded || 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="about-label">Employees</div>
+                  <div className="about-value">{fundamentals.about.employees || 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="about-label">Headquarters</div>
+                  <div className="about-value">{fundamentals.about.headquarters || 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {fundamentals?.news?.length > 0 && (
+            <div className="card">
+              <div className="section-title">📰 Recent News</div>
+              {fundamentals.news.map((item, i) => (
+                <a
+                  key={i}
+                  href={item.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="news-item"
+                >
+                  <div className="news-headline">{item.headline}</div>
+                  <div className="news-meta">
+                    {item.source}{item.source && item.date ? ' · ' : ''}{item.date}
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="tabs">
         {TABS.map(({ id, label }) => (
           <div
@@ -432,6 +482,116 @@ export default function Company() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'financials' && (
+        <div className="tab-content active" id="tab-financials">
+          <div className="card">
+            {(() => {
+              const periods = fundamentals?.financials?.[financialsPeriod] || []
+              // SerpApi returns most-recent-first; chart reads left-to-right chronologically.
+              const chronological = [...periods].reverse()
+              const maxVal = Math.max(
+                1,
+                ...chronological.map((p) => Math.max(Math.abs(p.revenue || 0), Math.abs(p.net_income || 0)))
+              )
+
+              if (periods.length === 0) {
+                return (
+                  <div style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--muted)' }}>
+                    <div style={{ fontSize: '13px', marginBottom: '12px' }}>
+                      No financial statement data cached for this company yet.
+                    </div>
+                    <button
+                      className="btn-outline"
+                      style={{ width: 'auto', padding: '8px 20px', margin: '0 auto' }}
+                      onClick={handleRefreshFundamentals}
+                      disabled={refreshingFundamentals}
+                    >
+                      {refreshingFundamentals ? '↻ Fetching...' : '📊 Fetch Financials'}
+                    </button>
+                  </div>
+                )
+              }
+
+              return (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <div className="section-title" style={{ marginBottom: 0 }}>Revenue &amp; Net Income</div>
+                    <div className="period-toggle">
+                      <div
+                        className={`period-btn ${financialsPeriod === 'annual' ? 'active' : ''}`}
+                        onClick={() => setFinancialsPeriod('annual')}
+                      >
+                        Annual
+                      </div>
+                      <div
+                        className={`period-btn ${financialsPeriod === 'quarterly' ? 'active' : ''}`}
+                        onClick={() => setFinancialsPeriod('quarterly')}
+                      >
+                        Quarterly
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="fin-legend">
+                    <div className="fin-legend-item">
+                      <div className="fin-legend-dot" style={{ background: 'var(--accent)' }} />
+                      Revenue
+                    </div>
+                    <div className="fin-legend-item">
+                      <div className="fin-legend-dot" style={{ background: 'var(--green)' }} />
+                      Net Income
+                    </div>
+                  </div>
+
+                  <div className="fin-chart">
+                    {chronological.map((p, i) => (
+                      <div key={i} className="fin-bar-group">
+                        <div className="fin-bars">
+                          <div
+                            className="fin-bar revenue"
+                            style={{ height: `${Math.max(4, (Math.abs(p.revenue || 0) / maxVal) * 170)}px` }}
+                            title={`Revenue: ${formatCap(p.revenue)}`}
+                          />
+                          <div
+                            className={`fin-bar net-income ${(p.net_income || 0) < 0 ? 'negative' : ''}`}
+                            style={{ height: `${Math.max(4, (Math.abs(p.net_income || 0) / maxVal) * 170)}px` }}
+                            title={`Net Income: ${formatCap(p.net_income)}`}
+                          />
+                        </div>
+                        <div className="fin-bar-label">{p.date || '—'}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <table className="fin-table">
+                    <thead>
+                      <tr>
+                        <th>Period</th>
+                        <th>Revenue</th>
+                        <th>Net Income</th>
+                        <th>Net Margin</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {periods.map((p, i) => (
+                        <tr key={i}>
+                          <td>{p.date || '—'}</td>
+                          <td>{formatCap(p.revenue)}</td>
+                          <td style={{ color: (p.net_income || 0) < 0 ? 'var(--red)' : 'inherit' }}>
+                            {formatCap(p.net_income)}
+                          </td>
+                          <td>{p.revenue ? formatPercent(p.net_income / p.revenue) : 'N/A'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+            })()}
           </div>
         </div>
       )}

@@ -3,7 +3,8 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from app.models.schemas import CompanyCreate
 from app.db.supabase import get_supabase
 from app.dependencies import get_current_user_id
-from app.services.market_data import fetch_fundamentals, fetch_price_only
+from app.services.market_data import fetch_price_only
+from app.services.market_data_serp import fetch_fundamentals_serp as fetch_fundamentals
 from app.services.auto_research_agent import run_auto_research
 from app.utils.logger import logger
 from pydantic import BaseModel as PydanticBaseModel

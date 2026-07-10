@@ -65,6 +65,7 @@ async def run_auto_research(
     result = {
         "status":        "partial",
         "news_summary":  None,
+        "news_items":    [],
         "pdf_processed": False,
         "document_id":   None,
         "message":       ""
@@ -78,6 +79,7 @@ async def run_auto_research(
         news_items = await fetch_company_news(company_name, ticker)
         
         if news_items:
+            result["news_items"] = news_items[:8]
             news_text = "\n\n".join([
                 f"Source: {item['title']}\n{item['snippet']}"
                 for item in news_items[:6]

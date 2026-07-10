@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     mistral_api_key: str
     frontend_url: str = "http://localhost:5173"
 
+    # SerpApi (Google Finance) — used for fundamentals/about/news; NSE Node
+    # service still handles live price, so this only gets hit on cache-miss.
+    serpapi_key: Optional[str] = None
+
     # LangSmith Observability
     langsmith_tracing: str = "false"
     langsmith_api_key: Optional[str] = None
