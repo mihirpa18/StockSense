@@ -6,6 +6,7 @@ from typing import List
 from langsmith import traceable
 from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception, before_sleep_log
 import logging
+from app.services.rate_limiter import acquire, MISTRAL_EMBED_CAPACITY, MISTRAL_EMBED_REFILL_RATE
 
 # mistral-embed produces 1024-dimensional vectors!
 # Note: You must update your Supabase database schema to vector(1024)
@@ -45,6 +46,7 @@ def get_embedding(text: str) -> List[float]:
     Returns a 1024-dimensional embedding vector for the given text.
     """
     truncated = _truncate_to_tokens(text)
+    acquire("mistral_embed", MISTRAL_EMBED_CAPACITY, MISTRAL_EMBED_REFILL_RATE)
     return embeddings_client.embed_documents([truncated])[0]
 
 @traceable(name="Get Embeddings Batch", run_type="embedding")
@@ -56,6 +58,7 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     Retries with exponential backoff on 429 / transient errors (up to 3 attempts).
     """
     truncated_texts = [_truncate_to_tokens(t) for t in texts]
+    acquire("mistral_embed", MISTRAL_EMBED_CAPACITY, MISTRAL_EMBED_REFILL_RATE)
     return embeddings_client.embed_documents(truncated_texts)
 
 @traceable(name="Get Query Embedding", run_type="embedding")
@@ -67,4 +70,5 @@ def get_query_embedding(text: str) -> List[float]:
     so embed_query() and embed_documents() are functionally equivalent here.
     """
     truncated = _truncate_to_tokens(text)
+    acquire("mistral_embed", MISTRAL_EMBED_CAPACITY, MISTRAL_EMBED_REFILL_RATE)
     return embeddings_client.embed_query(truncated)

@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     langsmith_tracing: str = "false"
     langsmith_api_key: Optional[str] = None
     langsmith_project: str = "stocksense"
+    
+    # Upstash Redis — token-bucket rate limiting, SerpApi response caching,
+    # and (later) the arq background job queue all share this one connection.
+    redis_url: str
+
 
     class Config:
         env_file = ".env"

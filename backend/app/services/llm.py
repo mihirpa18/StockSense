@@ -3,6 +3,7 @@ from app.config import settings
 from app.models.schemas import ReviewResult, ThesisDraft
 from typing import List, Dict, Optional
 from langsmith import traceable
+from app.services.rate_limiter import acquire, GEMINI_CHAT_CAPACITY, GEMINI_CHAT_REFILL_RATE
 
 # We can use gemini-2.5-flash for fast RAG responses
 MODEL = "gemini-2.5-flash"
@@ -82,6 +83,7 @@ USER QUESTION: {question}
 
 ANSWER:"""
 
+    acquire("gemini_chat", GEMINI_CHAT_CAPACITY, GEMINI_CHAT_REFILL_RATE)
     response = llm.invoke(prompt)
     return response.content
 
@@ -110,6 +112,7 @@ For each assumption, determine status:
 - "weakening": partial evidence or contradictory signals
 - "invalidated": report or web source clearly contradicts this assumption"""
 
+    acquire("gemini_chat", GEMINI_CHAT_CAPACITY, GEMINI_CHAT_REFILL_RATE)
     result: ReviewResult = review_llm.invoke(prompt)
     return result.model_dump()
 
@@ -136,5 +139,6 @@ STRICT RULES:
 2. Ground all points in direct facts from the context.
 3. Keep the tone professional, objective, and retail-investor-friendly."""
 
+    acquire("gemini_chat", GEMINI_CHAT_CAPACITY, GEMINI_CHAT_REFILL_RATE)
     result: ThesisDraft = draft_llm.invoke(prompt)
     return result.model_dump()
