@@ -568,6 +568,69 @@
   .tab-content { display: none; }
   .tab-content.active { display: block; }
 
+  /* 52-week range bar */
+  .range-card { margin-bottom: 20px; }
+
+  .range-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .range-current {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .range-track {
+    position: relative;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+  }
+
+  .range-fill {
+    position: absolute;
+    top: 0; left: 0;
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, rgba(var(--accent-rgb),0.25), var(--accent));
+    transition: width 0.4s ease;
+  }
+
+  .range-marker {
+    position: absolute;
+    top: 50%;
+    width: 14px; height: 14px;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.6);
+    transition: left 0.4s ease;
+  }
+
+  .range-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--sub);
+  }
+
+  .range-labels-tag {
+    font-family: var(--sans);
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 4px;
+  }
+
   /* Fundamentals row */
   .fundamentals {
     display: grid;
@@ -592,15 +655,49 @@
   }
 
   .fund-tooltip {
-    width: 14px; height: 14px;
+    position: relative;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: var(--border);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     font-size: 9px;
-    cursor: pointer;
+    cursor: help;
     color: var(--muted);
+    transition: all 0.2s ease;
+  }
+  .fund-tooltip:hover {
+    background: var(--accent);
+    color: white;
+  }
+  .fund-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 130%;
+    left: 50%;
+    transform: translateX(-50%) translateY(4px) scale(0.95);
+    background: rgba(15, 23, 42, 0.96);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 11px;
+    width: 220px;
+    line-height: 1.55;
+    white-space: normal;
+    text-align: left;
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 10000;
+    font-weight: normal;
+  }
+  .fund-tooltip:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
   }
 
   .fund-value { font-family: var(--mono); font-size: 18px; font-weight: 500; margin-top: 6px; }
@@ -676,6 +773,7 @@
     display: flex;
     flex-direction: column;
     height: 500px;
+    min-width: 0;
   }
 
   .chat-header {
@@ -702,9 +800,16 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-width: 0;
   }
 
-  .msg { display: flex; flex-direction: column; gap: 4px; }
+  .msg { 
+    display: flex; 
+    flex-direction: column; 
+    gap: 4px; 
+    min-width: 0;
+    max-width: 100%;
+  }
 
   .msg-role {
     font-size: 10px;
@@ -722,6 +827,8 @@
     font-size: 13.5px;
     line-height: 1.6;
     max-width: 92%;
+    word-break: break-word;
+    overflow-wrap: break-word;
   }
 
   .msg.user .msg-bubble {

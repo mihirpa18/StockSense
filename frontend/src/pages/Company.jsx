@@ -120,10 +120,12 @@ export default function Company() {
       .select('*')
       .eq('company_id', companyId)
       .eq('user_id', user?.id)
+      .neq('status', 'failed')
       .order('uploaded_at', { ascending: false })
     setDocuments(data || [])
     if (data?.length > 0 && !selectedDocId) {
-      setSelectedDocId(data[0].id)
+      const readyDoc = data.find(d => d.status === 'ready') || data[0]
+      setSelectedDocId(readyDoc?.id || null)
     }
   }
 
@@ -315,6 +317,9 @@ export default function Company() {
               </div>
             )}
           </div>
+          <div style={{ marginTop: '16px', height: '350px', width: '100%', borderRadius: '8px', overflow: 'hidden' }}>
+            <TradingViewWidget ticker={company.ticker} exchange="BSE" />
+          </div>
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <button
@@ -336,30 +341,86 @@ export default function Company() {
           <button className={isWatched ? 'save-btn' : 'btn-outline'} style={{width:'170px',padding:'8px', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px'}} onClick={handleWatchlistToggle}>
             <Star size={13} fill={isWatched ? 'currentColor' : 'none'} /> {isWatched ? 'Watchlisted' : 'Watch'}
           </button>
-          <button className="btn-outline" style={{width:'170px', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px'}} onClick={() => navigate('/journal')}><Plus size={13} /> Add to Journal</button>
         </div>
       </div>
 
+      {fundamentals?.fifty_two_week_low != null && fundamentals?.fifty_two_week_high != null && (() => {
+        const lo = fundamentals.fifty_two_week_low
+        const hi = fundamentals.fifty_two_week_high
+        const cur = fundamentals.current_price
+        const pct = cur != null && hi > lo
+          ? Math.min(100, Math.max(0, ((cur - lo) / (hi - lo)) * 100))
+          : null
+        return (
+          <div className="card range-card">
+            <div className="range-card-header">
+              <span className="card-label" style={{ marginBottom: 0 }}>52-Week Range</span>
+              {cur != null && <span className="range-current">{formatPrice(cur)}</span>}
+            </div>
+            <div className="range-track">
+              <div className="range-fill" style={{ width: pct != null ? `${pct}%` : '0%' }} />
+              {pct != null && (
+                <div className="range-marker" style={{ left: `${pct}%` }} title={`Current: ${formatPrice(cur)}`} />
+              )}
+            </div>
+            <div className="range-labels">
+              <span>{formatPrice(lo)} <span className="range-labels-tag">52W Low</span></span>
+              <span>{formatPrice(hi)} <span className="range-labels-tag">52W High</span></span>
+            </div>
+          </div>
+        )
+      })()}
+
       {fundamentals && (
         <div className="fundamentals">
-          <div className="fund-card">
-            <div className="fund-label">P/E Ratio <span className="fund-tooltip">?</span></div>
+          <div className="fund-card" title="Price-to-Earnings Ratio: Measures the share price relative to per-share earnings. Indicates how much the market is willing to pay.">
+            <div className="fund-label">
+              P/E Ratio 
+              <span 
+                className="fund-tooltip" 
+                data-tooltip="Price-to-Earnings Ratio: Measures the share price relative to per-share earnings. Indicates how much the market is willing to pay."
+              >?</span>
+            </div>
             <div className="fund-value">{formatRatio(fundamentals.pe_ratio)}</div>
           </div>
-          <div className="fund-card">
-            <div className="fund-label">ROE <span className="fund-tooltip">?</span></div>
+          <div className="fund-card" title="Return on Equity: Profitability generated relative to shareholder equity. Shows efficiency at turning capital into profit.">
+            <div className="fund-label">
+              ROE 
+              <span 
+                className="fund-tooltip" 
+                data-tooltip="Return on Equity: Profitability generated relative to shareholder equity. Shows efficiency at turning capital into profit."
+              >?</span>
+            </div>
             <div className="fund-value">{formatPercent(fundamentals.roe)}</div>
           </div>
-          <div className="fund-card">
-            <div className="fund-label">Revenue Growth <span className="fund-tooltip">?</span></div>
+          <div className="fund-card" title="Revenue Growth: Year-over-year growth in sales. Indicates business expansion and market demand.">
+            <div className="fund-label">
+              Revenue Growth 
+              <span 
+                className="fund-tooltip" 
+                data-tooltip="Revenue Growth: Year-over-year growth in sales. Indicates business expansion and market demand."
+              >?</span>
+            </div>
             <div className="fund-value">{formatPercent(fundamentals.revenue_growth)}</div>
           </div>
-          <div className="fund-card">
-            <div className="fund-label">Debt/Equity <span className="fund-tooltip">?</span></div>
+          <div className="fund-card" title="Debt/Equity Ratio: Proportion of debt relative to equity capital. High leverage increases financial risk.">
+            <div className="fund-label">
+              Debt/Equity 
+              <span 
+                className="fund-tooltip" 
+                data-tooltip="Debt/Equity Ratio: Proportion of debt relative to equity capital. High leverage increases financial risk."
+              >?</span>
+            </div>
             <div className="fund-value">{formatRatio(fundamentals.debt_to_equity)}</div>
           </div>
-          <div className="fund-card">
-            <div className="fund-label">Net Margin <span className="fund-tooltip">?</span></div>
+          <div className="fund-card" title="Net Profit Margin: Percentage of revenue left as profit after all expenses. Shows pricing power and efficiency.">
+            <div className="fund-label">
+              Net Margin 
+              <span 
+                className="fund-tooltip" 
+                data-tooltip="Net Profit Margin: Percentage of revenue left as profit after all expenses. Shows pricing power and efficiency."
+              >?</span>
+            </div>
             <div className="fund-value">{formatPercent(fundamentals.profit_margin)}</div>
           </div>
         </div>
@@ -427,10 +488,6 @@ export default function Company() {
 
       {activeTab === 'research' && (
         <div className="tab-content active" id="tab-research">
-          <div style={{marginBottom: '20px', height: '400px'}}>
-            <TradingViewWidget ticker={company.ticker} exchange={company.exchange} />
-          </div>
-
           <div className="research-layout">
             <div className="chat-panel" style={{height: '600px'}}>
               <ChatPanel companyId={companyId} documentId={selectedDocId} />
@@ -440,7 +497,7 @@ export default function Company() {
               <div className="upload-panel">
                 <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>Documents</div>
                 
-                {documents.map((doc) => (
+                {documents.filter(doc => doc.status !== 'failed').map((doc) => (
                   <div 
                     key={doc.id} 
                     className="uploaded-doc" 

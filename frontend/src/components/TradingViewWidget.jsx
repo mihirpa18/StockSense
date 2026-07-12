@@ -1,10 +1,7 @@
 import { useEffect, useRef, memo } from 'react'
 
-// TradingView widget is completely free — just an iframe/script embed.
-// NSE symbols format: "NSE:TATAMOTORS"
-// No API key required.
 
-function TradingViewWidget({ ticker, exchange = 'NSE' }) {
+function TradingViewWidget({ ticker, exchange = 'BSE' }) {
   const containerRef = useRef(null)
   const cleanTicker = (ticker || '').replace('.NS', '').replace('.BO', '')
 
@@ -38,7 +35,7 @@ function TradingViewWidget({ ticker, exchange = 'NSE' }) {
       theme: 'dark',
       style: '1',
       locale: 'en',
-      backgroundColor: 'rgba(10, 15, 30, 0.01)',
+      backgroundColor: '#0a0f1e',
       gridColor: 'rgba(255, 255, 255, 0.06)',
       hide_top_toolbar: false,
       hide_legend: false,
