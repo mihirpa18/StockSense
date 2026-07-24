@@ -2,6 +2,7 @@ from duckduckgo_search import DDGS
 from typing import List, Dict, Optional
 import httpx
 import asyncio
+from urllib.parse import urlparse, urlunparse
 from app.utils.logger import logger
 
 # ─── TOOL 1: Web Search ───────────────────────────────────────────────────
@@ -28,6 +29,40 @@ def search_web(query: str, max_results: int = 5) -> List[Dict]:
     except Exception as e:
         logger.error(f"Search error for query '{query}': {e}")
         return []
+
+
+# ─── TOOL 1b: Search with timeout + retry ──────────────────────────────────
+DDGS_TIMEOUT_SECONDS = 8
+MAX_SEARCH_RETRIES = 2
+
+async def _search_with_retry(query: str, max_results: int = 5) -> List[Dict]:
+    """
+    Wraps search_web in asyncio.to_thread + a hard timeout, with backoff retries.
+
+    search_web already catches exceptions internally and returns [], so the
+    failure mode we're actually guarding against here is DDGS *hanging* — the
+    lite backend occasionally stalls under rate limiting instead of raising,
+    which would otherwise block the whole auto-research pipeline for a company.
+
+    Note: asyncio.wait_for cancels our *await*, not the underlying thread —
+    Python can't forcibly kill a blocking call inside a thread. So a timed-out
+    call may still finish in the background; that's an accepted tradeoff over
+    letting one bad query stall everything.
+    """
+    for attempt in range(MAX_SEARCH_RETRIES + 1):
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(search_web, query, max_results),
+                timeout=DDGS_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"DDGS timed out (attempt {attempt + 1}) for query: {query}")
+        except Exception as e:
+            logger.warning(f"DDGS search failed (attempt {attempt + 1}) for query '{query}': {e}")
+        if attempt < MAX_SEARCH_RETRIES:
+            await asyncio.sleep(1.5 * (attempt + 1))
+    return []
+
 
 import socket
 from urllib.parse import urlparse
@@ -124,16 +159,15 @@ async def fetch_company_news(company_name: str, ticker: str) -> List[Dict]:
     Returns recent news snippets for a company.
     These are used for the news summary section — NOT fed into the RAG pipeline.
     """
-    # Optimized to a single, high-quality query to reduce rate limit hits
     queries = [
-        f"{company_name} {ticker} stock latest news earnings 2024"
+        f"{company_name} {ticker} stock latest news earnings 2025"
     ]
 
     all_results = []
     for i, query in enumerate(queries):
         if i > 0:
             await asyncio.sleep(2.0)  # Avoid DDG rate limiting
-        results = await asyncio.to_thread(search_web, query, max_results=5)
+        results = await _search_with_retry(query, max_results=5)
         all_results.extend(results)
 
     # Deduplicate by URL
@@ -146,40 +180,86 @@ async def fetch_company_news(company_name: str, ticker: str) -> List[Dict]:
 
     return unique[:8]
 
+
 # ─── TOOL 4: PDF Link Finder ───────────────────────────────────────────────
+EXCLUDE_KEYWORDS = {
+    "presentation", "slides", "press-release", "pressrelease", "transcript",
+    "factsheet", "summary", "brief", "investor-presentation", "concall",
+    "notice", "agm-notice", "proxy",
+}
+
+# Path/domain signals used to rank candidates once we have several
+POSITIVE_HINTS = {
+    "annual-report": 5, "annualreport": 5, "annual_report": 5,
+    "integrated-report": 3, "integratedreport": 3,
+    "ar-2026": 4, "ar2026": 4, "ar-2025": 3, "ar2025": 3,
+    "2026": 2, "2025": 1,
+}
+NEGATIVE_DOMAINS = ("moneycontrol", "screener.in", "scribd", "slideshare")
+
+
+def _normalize_url(url: str) -> str:
+    """Strip fragment/trailing slash so http/https or #page= variants of the
+    same PDF dedupe correctly instead of both landing in the result set."""
+    parsed = urlparse(url)
+    return urlunparse(parsed._replace(fragment="")).rstrip("/")
+
+
+def _score_url(url: str) -> int:
+    url_lower = url.lower()
+    score = sum(w for hint, w in POSITIVE_HINTS.items() if hint in url_lower)
+    if any(dom in url_lower for dom in NEGATIVE_DOMAINS):
+        score -= 3  # aggregator reposts are less trustworthy than the primary filing
+    if url_lower.endswith(".pdf"):
+        score += 1  # stronger signal than merely containing "pdf" in a query string
+    return score
+
+
+def _passes_filters(url: str) -> bool:
+    url_lower = url.lower()
+    if not (url_lower.endswith(".pdf") or "pdf" in url_lower):
+        return False
+    if any(k in url_lower for k in EXCLUDE_KEYWORDS):
+        return False
+    return True
+
+
 async def find_annual_report_links(company_name: str, ticker: str) -> List[str]:
     """
-    Tries to find direct downloadable PDF links for the latest annual report.
-    Returns a list of candidate URLs, ordered by priority.
+    Finds direct downloadable PDF links for the latest annual report,
+    ranked best-first by how likely each is to be the actual report
+    (vs. a presentation, transcript, or aggregator repost).
     """
-    # Optimized to a single, highly-targeted filetype query to reduce DDG hits
     search_queries = [
-        f"{company_name} {ticker} annual report latest year filetype:pdf site:bseindia.com OR site:nseindia.com"
+        f'"{company_name}" "{ticker}" annual report 2026 OR FY26 filetype:pdf',
+        f'"{company_name}" "{ticker}" annual report 2025 OR FY25 filetype:pdf',
+        f'"{ticker}" investor relations annual report pdf',
     ]
 
-    urls = []
-    seen = set()
+    candidates: Dict[str, str] = {}  # normalized_url -> original_url
+
     for i, query in enumerate(search_queries):
         if i > 0:
-            await asyncio.sleep(2.0)
-        results = await asyncio.to_thread(search_web, query, max_results=5)
+            await asyncio.sleep(1.5)
+        results = await _search_with_retry(query, max_results=6)
         for result in results:
             url = result.get("url", "")
-            if url and url not in seen:
-                if url.endswith(".pdf") or "pdf" in url.lower():
-                    seen.add(url)
-                    urls.append(url)
+            if url and _passes_filters(url):
+                candidates.setdefault(_normalize_url(url), url)
 
-    # Fallback if the strict query finds nothing, try a slightly broader one
-    if not urls:
-        await asyncio.sleep(2.0)
-        results = await asyncio.to_thread(
-            search_web, f"{company_name} {ticker} annual report investor presentation filetype:pdf", max_results=3
+        if len(candidates) >= 5:
+            break  # enough good candidates — stop burning DDGS calls / risking rate limits
+
+    # Fallback if the strict queries find nothing — same filters apply here too
+    # (the original bug: this branch skipped exclude_keywords entirely)
+    if not candidates:
+        await asyncio.sleep(1.0)
+        results = await _search_with_retry(
+            f'"{company_name}" {ticker} financial report filetype:pdf', max_results=4
         )
         for result in results:
             url = result.get("url", "")
-            if url and url not in seen and (url.endswith(".pdf") or "pdf" in url.lower()):
-                seen.add(url)
-                urls.append(url)
+            if url and _passes_filters(url):
+                candidates.setdefault(_normalize_url(url), url)
 
-    return urls
+    return sorted(candidates.values(), key=_score_url, reverse=True)

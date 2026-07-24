@@ -3,7 +3,7 @@ import { sendChat, getChatSessions, getChatHistory } from '../../lib/api'
 import Markdown from '../ui/Markdown'
 import { Plus, History, Send } from 'lucide-react'
 
-export default function ChatPanel({ companyId, documentId }) {
+export default function ChatPanel({ companyId, documentId, companyName, companySector }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState(null)
@@ -13,6 +13,59 @@ export default function ChatPanel({ companyId, documentId }) {
   const [loadingSessions, setLoadingSessions] = useState(false)
   const messagesEndRef = useRef(null)
   const sessionsPanelRef = useRef(null)
+
+  const getSuggestedQuestions = () => {
+    const sec = (companySector || '').toLowerCase()
+    const name = companyName || 'the company'
+    
+    const categories = {
+      financials: [],
+      strategy: [],
+      risks: []
+    }
+
+    if (sec.includes('bank') || sec.includes('financial') || sec.includes('insurance')) {
+      categories.financials = [
+        "What is the Net Interest Margin (NIM) trend?",
+        "Detail the Gross and Net NPA percentages."
+      ]
+      categories.strategy = [
+        `What are ${name}'s key growth areas?`,
+        "Detail the capital adequacy ratio (CAR) outlook."
+      ]
+      categories.risks = [
+        "What credit quality and provisions risks are highlighted?",
+        "What macroeconomic risks does management discuss?"
+      ]
+    } else if (sec.includes('auto') || sec.includes('manufactur') || sec.includes('steel') || sec.includes('metal')) {
+      categories.financials = [
+        "What are the EBITDA margins across segments?",
+        "Detail the capital expenditure (CapEx) plan."
+      ]
+      categories.strategy = [
+        `What is ${name}'s EV/green mobility outlook?`,
+        "What are the new product launches planned?"
+      ]
+      categories.risks = [
+        "What commodity price and inflation risks are mentioned?",
+        "What supply chain disruptions were highlighted?"
+      ]
+    } else {
+      categories.financials = [
+        "What are the main revenue growth drivers?",
+        "What is the operational profit margin (OPM) trend?"
+      ]
+      categories.strategy = [
+        `What are the strategic priorities for ${name}?`,
+        "Detail any recent investments or acquisitions."
+      ]
+      categories.risks = [
+        "What are the top three business risks mentioned?",
+        "What regulatory or compliance challenges exist?"
+      ]
+    }
+    return categories
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -203,11 +256,44 @@ export default function ChatPanel({ companyId, documentId }) {
 
       <div className="chat-messages" style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'16px',padding:'16px'}}>
         {messages.length === 0 && (
-          <div className="msg ai">
-             <div className="msg-role">AI Assistant</div>
-             <div className="msg-bubble">
-               I'm ready to help you research this company. Ask me anything about the financials, risks, business segments, or strategic direction based on the uploaded reports. I'll cite exactly where I found the information.
-             </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="msg ai">
+               <div className="msg-role">AI Assistant</div>
+               <div className="msg-bubble">
+                 I'm ready to help you research this company. Ask me anything about the financials, risks, business segments, or strategic direction based on the uploaded reports. I'll cite exactly where I found the information.
+               </div>
+            </div>
+
+            <div className="suggested-questions" style={{ marginTop: '8px' }}>
+              {(() => {
+                const groups = getSuggestedQuestions()
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {Object.entries(groups).map(([cat, qList]) => {
+                      if (qList.length === 0) return null
+                      return (
+                        <div key={cat}>
+                          <div className="sq-title" style={{ color: 'var(--accent)', fontSize: '10.5px', marginBottom: '6px' }}>
+                            {cat.toUpperCase()}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {qList.map((q, idx) => (
+                              <button
+                                key={idx}
+                                className="sq-chip"
+                                onClick={() => handleSend(q)}
+                              >
+                                {q}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         )}
 

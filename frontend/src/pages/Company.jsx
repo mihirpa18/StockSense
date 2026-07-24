@@ -52,6 +52,7 @@ export default function Company() {
   const [uploading, setUploading] = useState(false)
   const [autoResearching, setAutoResearching] = useState(false)
   const [agentResult, setAgentResult] = useState(null)
+  const [candidateUrls, setCandidateUrls] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshingPrice, setRefreshingPrice] = useState(false)
   const [refreshingFundamentals, setRefreshingFundamentals] = useState(false)
@@ -66,6 +67,7 @@ export default function Company() {
       setThesis(null)
       setActiveTab('research')
       setAgentResult(null)
+      setCandidateUrls([])
       loadCompanyData()
     }
   }, [companyId, user?.id])
@@ -154,34 +156,20 @@ export default function Company() {
 
   const handleAutoResearch = async () => {
     setAutoResearching(true)
+    setCandidateUrls([])
     try {
       const res = await triggerAutoResearch(companyId)
       
       if (res.data.status === 'pending_confirmation') {
-         const urls = res.data.candidate_urls || [];
-         let confirmedUrl = null;
-         for (const url of urls) {
-            const ok = window.confirm(`Found PDF at:\n${url}\n\nDo you want to upload this?`);
-            if (ok) {
-               confirmedUrl = url;
-               break;
-            }
-         }
-         
-         if (confirmedUrl) {
-            toast('Processing confirmed PDF...', { icon: '⏳' });
-            const processRes = await triggerAutoResearch(companyId, { target_url: confirmedUrl });
-            setAgentResult(processRes.data);
-            if (processRes.data.pdf_processed) {
-              toast.success('Report processed! You can now ask questions.')
-              await fetchDocuments()
-            } else {
-              toast.error('Failed to process the confirmed PDF.')
-            }
-         } else {
-            toast('Auto research cancelled or no PDF selected.');
-            setAgentResult({ news_summary: res.data.news_summary, pdf_processed: false });
-         }
+         // Save news summary/items immediately
+         setAgentResult({
+           news_summary: res.data.news_summary,
+           news_items: res.data.news_items || [],
+           pdf_processed: false
+         })
+         // Save candidate URLs for UI selection list
+         setCandidateUrls(res.data.candidate_urls || [])
+         toast('Discovered candidate reports! Select one to ingest.', { icon: '🔍' })
       } else {
         setAgentResult(res.data)
         if (res.data.pdf_processed) {
@@ -192,7 +180,31 @@ export default function Company() {
         }
       }
     } catch (err) {
-      toast.error('Auto research failed. Please upload PDF manually.')
+      toast.error('Auto research failed.')
+    } finally {
+      setAutoResearching(false)
+    }
+  }
+
+  const handleIngestCandidate = async (url) => {
+    setAutoResearching(true)
+    toast('Processing PDF report...', { icon: '⏳' })
+    try {
+      const newsFromFirstCall = {
+        news_summary: agentResult?.news_summary,
+        news_items: agentResult?.news_items || []
+      }
+      const processRes = await triggerAutoResearch(companyId, { target_url: url })
+      setAgentResult({ ...processRes.data, ...newsFromFirstCall })
+      if (processRes.data.pdf_processed) {
+        toast.success('Report processed successfully!')
+        setCandidateUrls([]) // Clear list on success
+        await fetchDocuments()
+      } else {
+        toast.error('Failed to process the selected PDF.')
+      }
+    } catch {
+      toast.error('PDF ingestion failed.')
     } finally {
       setAutoResearching(false)
     }
@@ -490,7 +502,12 @@ export default function Company() {
         <div className="tab-content active" id="tab-research">
           <div className="research-layout">
             <div className="chat-panel" style={{height: '600px'}}>
-              <ChatPanel companyId={companyId} documentId={selectedDocId} />
+              <ChatPanel 
+                companyId={companyId} 
+                documentId={selectedDocId} 
+                companyName={company?.name}
+                companySector={company?.sector}
+              />
             </div>
 
             <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
@@ -534,6 +551,51 @@ export default function Company() {
                   {autoResearching ? 'Researching...' : <><Sparkles size={13} /> Auto Research</>}
                 </button>
               </div>
+
+              {candidateUrls.length > 0 && (
+                <div className="upload-panel" style={{ borderColor: 'var(--amber)', background: 'rgba(245,158,11,0.03)' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--amber)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>🔍 Discovered Reports ({candidateUrls.length})</span>
+                    <button 
+                      onClick={() => setCandidateUrls([])} 
+                      style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '11px' }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                    {candidateUrls.map((url, i) => {
+                      let domain = 'Report Link'
+                      try { domain = new URL(url).hostname.replace('www.', '') } catch {}
+                      return (
+                        <div key={i} className="uploaded-doc" style={{ justifyContent: 'space-between', padding: '8px 10px', cursor: 'default' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                            <div className="doc-icon" style={{ color: 'var(--amber)' }}><FileText size={14} /></div>
+                            <a 
+                              href={url} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="doc-name" 
+                              style={{ fontSize: '12px', color: 'inherit', textDecoration: 'underline', textUnderlineOffset: '3px' }}
+                              title={`Click to open PDF: ${url}`}
+                            >
+                              {domain} ↗
+                            </a>
+                          </div>
+                          <button
+                            onClick={() => handleIngestCandidate(url)}
+                            disabled={autoResearching}
+                            className="save-btn"
+                            style={{ width: 'auto', padding: '3px 8px', fontSize: '11px', marginTop: 0 }}
+                          >
+                            Ingest
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
 
               {agentResult?.news_summary && (
                 <div className="upload-panel">
