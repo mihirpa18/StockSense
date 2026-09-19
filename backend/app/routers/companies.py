@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from app.models.schemas import CompanyCreate
 from app.db.supabase import get_supabase
 from app.dependencies import get_current_user_id
@@ -233,10 +233,14 @@ class AutoResearchReq(BaseModel):
     target_url: Optional[str] = None
 
 @router.post("/{company_id}/auto-research")
-async def auto_research(company_id: str, req: AutoResearchReq = None, user_id: str = Depends(get_current_user_id)):
+async def auto_research(
+    request: Request,
+    company_id: str,
+    req: AutoResearchReq = None,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     Triggers the auto research agent for a company.
-    This is an async operation that may take 30-60 seconds.
     user_id is derived from the verified JWT, not from client input.
     """
     supabase = get_supabase()
@@ -247,12 +251,14 @@ async def auto_research(company_id: str, req: AutoResearchReq = None, user_id: s
         raise HTTPException(status_code=404, detail="Company not found")
 
     target_url = req.target_url if req else None
+    arq_pool = getattr(request.app.state, "arq_pool", None)
 
     result = await run_auto_research(
         company_id=company_id,
         company_name=company.data["name"],
         ticker=company.data["ticker"],
         user_id=user_id,
-        target_url=target_url
+        target_url=target_url,
+        arq_pool=arq_pool
     )
     return result

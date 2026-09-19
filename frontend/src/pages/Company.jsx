@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getCompany,
@@ -24,7 +24,7 @@ import toast from 'react-hot-toast'
 import {
   FlaskConical, BarChart3, ClipboardList, FileEdit,
   Star, IndianRupee, RefreshCw, Sparkles, Building2, Newspaper,
-  FileText, CheckCircle2, UploadCloud, Plus, Clock
+  FileText, CheckCircle2, UploadCloud, Plus, Clock, Loader2, AlertCircle
 } from 'lucide-react'
 
 const TABS = [
@@ -42,6 +42,7 @@ export default function Company() {
   const [company, setCompany] = useState(null)
   const [fundamentals, setFundamentals] = useState(null)
   const [documents, setDocuments] = useState([])
+  const prevDocStatusesRef = useRef({})
   const [selectedDocId, setSelectedDocId] = useState(null)
   const [thesis, setThesis] = useState(null)
   const [notes, setNotes] = useState('')
@@ -117,19 +118,53 @@ export default function Company() {
   }
 
   const fetchDocuments = async () => {
+    let uid = user?.id
+    if (!uid) {
+      const { data: sessionData } = await supabase.auth.getSession()
+      uid = sessionData?.session?.user?.id
+    }
+    if (!uid) return
+
     const { data } = await supabase
       .from('documents')
       .select('*')
       .eq('company_id', companyId)
-      .eq('user_id', user?.id)
-      .neq('status', 'failed')
+      .eq('user_id', uid)
       .order('uploaded_at', { ascending: false })
-    setDocuments(data || [])
-    if (data?.length > 0 && !selectedDocId) {
-      const readyDoc = data.find(d => d.status === 'ready') || data[0]
-      setSelectedDocId(readyDoc?.id || null)
+
+    if (data) {
+      // Check for status transitions (processing -> ready / failed)
+      data.forEach((doc) => {
+        const prevStatus = prevDocStatusesRef.current[doc.id]
+        if (prevStatus === 'processing' && doc.status === 'ready') {
+          toast.success(`Report '${doc.filename}' is ready! (${doc.page_count || 0} pages, ${doc.chunk_count || 0} chunks)`)
+          setSelectedDocId((prev) => prev || doc.id)
+        } else if (prevStatus === 'processing' && doc.status === 'failed') {
+          toast.error(`Processing failed for '${doc.filename}'`)
+        }
+        prevDocStatusesRef.current[doc.id] = doc.status
+      })
+
+      setDocuments(data)
+
+      if (data.length > 0 && !selectedDocId) {
+        const readyDoc = data.find((d) => d.status === 'ready')
+        if (readyDoc) setSelectedDocId(readyDoc.id)
+      }
     }
   }
+
+  // Poll documents every 3 seconds while any document is in 'processing' status
+  useEffect(() => {
+    const hasProcessing = documents.some((d) => d.status === 'processing')
+    if (!hasProcessing) return
+
+    const interval = setInterval(() => {
+      fetchDocuments()
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [documents, companyId, user?.id])
 
   const handleUpload = async (e) => {
     const file = e.target.files?.[0]
@@ -144,7 +179,11 @@ export default function Company() {
       formData.append('fiscal_year', 'FY24')
 
       const res = await uploadDocument(formData)
-      toast.success(`Processed ${res.data.page_count} pages, ${res.data.chunk_count} chunks`)
+      if (res.data.status === 'processing') {
+        toast('Upload started! Processing report in background...', { icon: 'ℹ️' })
+      } else if (res.data.status === 'ready') {
+        toast.success(`Processed ${res.data.page_count} pages, ${res.data.chunk_count} chunks`)
+      }
       await fetchDocuments()
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Upload failed')
@@ -188,7 +227,7 @@ export default function Company() {
 
   const handleIngestCandidate = async (url) => {
     setAutoResearching(true)
-    toast('Processing PDF report...', { icon: '⏳' })
+    toast('Downloading report for background processing...', { icon: '⏳' })
     try {
       const newsFromFirstCall = {
         news_summary: agentResult?.news_summary,
@@ -197,7 +236,7 @@ export default function Company() {
       const processRes = await triggerAutoResearch(companyId, { target_url: url })
       setAgentResult({ ...processRes.data, ...newsFromFirstCall })
       if (processRes.data.pdf_processed) {
-        toast.success('Report processed successfully!')
+        toast('Report downloaded! Embedding in background...', { icon: 'ℹ️' })
         setCandidateUrls([]) // Clear list on success
         await fetchDocuments()
       } else {
@@ -514,19 +553,34 @@ export default function Company() {
               <div className="upload-panel">
                 <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>Documents</div>
                 
-                {documents.filter(doc => doc.status !== 'failed').map((doc) => (
+                {documents.map((doc) => (
                   <div 
                     key={doc.id} 
                     className="uploaded-doc" 
-                    style={selectedDocId === doc.id ? { borderColor: 'var(--accent)' } : { cursor: 'pointer' }}
-                    onClick={() => setSelectedDocId(doc.id)}
+                    style={selectedDocId === doc.id ? { borderColor: 'var(--accent)' } : { cursor: doc.status === 'ready' ? 'pointer' : 'default' }}
+                    onClick={() => {
+                      if (doc.status === 'ready') setSelectedDocId(doc.id)
+                    }}
                   >
                     <div className="doc-icon"><FileText size={16} /></div>
                     <div>
                       <div className="doc-name">{doc.filename}</div>
-                      <div className="doc-size">{doc.page_count} pages</div>
+                      <div className="doc-size">
+                        {doc.status === 'processing' ? 'Processing...' : doc.status === 'failed' ? 'Failed' : `${doc.page_count || 0} pages`}
+                      </div>
                     </div>
-                    <div className="doc-status"><CheckCircle2 size={11} /> {doc.status}</div>
+                    <div className="doc-status" style={
+                      doc.status === 'processing' 
+                        ? { color: 'var(--amber)', background: 'rgba(245,158,11,0.1)' } 
+                        : doc.status === 'failed' 
+                        ? { color: '#ef4444', background: 'rgba(239,68,68,0.1)' } 
+                        : {}
+                    }>
+                      {doc.status === 'processing' && <Loader2 size={11} className="animate-spin" />}
+                      {doc.status === 'ready' && <CheckCircle2 size={11} />}
+                      {doc.status === 'failed' && <AlertCircle size={11} />}
+                      {' '}{doc.status}
+                    </div>
                   </div>
                 ))}
                 

@@ -1,11 +1,27 @@
 import time
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from arq import create_pool
 from app.routers import upload, chat, thesis, journal, companies, notes
 from app.config import settings
 from app.utils.logger import logger
+from app.worker import _redis_settings_from_url
 
-app = FastAPI(title="StockSense API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # One shared arq connection pool for the whole app's lifetime, instead
+    # of upload.py opening a fresh Redis connection on every request —
+    # same reasoning as the get_supabase() singleton fix.
+    app.state.arq_pool = await create_pool(_redis_settings_from_url(settings.redis_url))
+    logger.info("arq pool connected (background job queue ready)")
+    yield
+    await app.state.arq_pool.close()
+    logger.info("arq pool closed")
+
+
+app = FastAPI(title="StockSense API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,4 +67,3 @@ app.include_router(notes.router,     prefix="/api/notes",     tags=["notes"])
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-

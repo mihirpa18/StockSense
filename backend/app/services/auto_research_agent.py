@@ -50,13 +50,16 @@ SUMMARY:"""
     response = llm.invoke(summary_prompt)
     return response.content
 
+from app.services.storage import upload_raw_pdf
+
 @traceable(name="Run Auto Research Agent", run_type="chain")
 async def run_auto_research(
     company_id: str,
     company_name: str,
     ticker: str,
     user_id: str,
-    target_url: str = None
+    target_url: str = None,
+    arq_pool = None
 ) -> Dict:
     """
     Main agent function. Returns a status dict with what was accomplished.
@@ -102,73 +105,43 @@ async def run_auto_research(
     logger.info(f"Auto-Research: Downloading confirmed PDF: {target_url}")
     pdf_bytes = await download_pdf_from_url(target_url)
 
-    if pdf_bytes and len(pdf_bytes) > 10000:  # sanity check: >10KB
-        logger.info(f"Auto-Research: PDF downloaded ({len(pdf_bytes)} bytes). Extracting & chunking...")
+    if pdf_bytes and len(pdf_bytes) > 10000 and pdf_bytes[:4] == b"%PDF":
+        logger.info(f"Auto-Research: PDF downloaded ({len(pdf_bytes)} bytes). Persisting and enqueueing...")
         doc_id = str(uuid.uuid4())
+        filename = f"{ticker}_auto_research.pdf"
 
+        # 1. Upload raw PDF to Supabase Storage
+        storage_path = upload_raw_pdf(user_id, doc_id, pdf_bytes)
+
+        # 2. Insert document record with status = 'processing'
         supabase.table("documents").insert({
             "id":          doc_id,
             "user_id":     user_id,
             "company_id":  company_id,
-            "filename":    f"{ticker}_auto_research.pdf",
+            "filename":    filename,
             "file_size":   len(pdf_bytes),
             "doc_type":    "annual_report",
             "fiscal_year": "auto",
             "status":      "processing"
         }).execute()
 
-        try:
-            pages  = await asyncio.to_thread(extract_text_by_page, pdf_bytes)
-            chunks = await asyncio.to_thread(chunk_page_texts, pages)
+        # 3. Hand off background processing to arq worker (or background task fallback)
+        if arq_pool:
+            await arq_pool.enqueue_job(
+                "process_document_upload", doc_id, company_id, user_id, filename, storage_path
+            )
+            logger.info(f"Auto-Research: Enqueued PDF {doc_id} to arq worker queue.")
+        else:
+            from app.worker import process_document_upload
+            asyncio.create_task(
+                process_document_upload(None, doc_id, company_id, user_id, filename, storage_path)
+            )
+            logger.info(f"Auto-Research: arq pool unavailable, started background task for {doc_id}.")
 
-            chunk_rows = []
-            BATCH_SIZE = 64
-            
-            logger.info(f"Auto-Research: Embedding {len(chunks)} chunks in batches of {BATCH_SIZE}...")
-            for i in range(0, len(chunks), BATCH_SIZE):
-                batch_chunks = chunks[i:i+BATCH_SIZE]
-                batch_texts = [c["content"] for c in batch_chunks]
-                
-                # Fetch embeddings for the whole batch in one API call
-                embeddings = await asyncio.to_thread(get_embeddings_batch, batch_texts)
-                
-                for chunk, embedding in zip(batch_chunks, embeddings):
-                    chunk_rows.append({
-                        "document_id": doc_id,
-                        "company_id":  company_id,
-                        "user_id":     user_id,
-                        "chunk_index": chunk["chunk_index"],
-                        "page_number": chunk["page_number"],
-                        "content":     chunk["content"],
-                        "token_count": chunk["token_count"],
-                        "embedding":   embedding
-                    })
-                
-                # Sleep between batches to avoid Mistral rate limit
-                if i + BATCH_SIZE < len(chunks):
-                    await asyncio.sleep(1.5)
-
-            # Batch insert
-            logger.info(f"Auto-Research: Uploading {len(chunks)} chunks in batches of 50 to database...")
-            for i in range(0, len(chunk_rows), 50):
-                supabase.table("chunks").insert(chunk_rows[i:i+50]).execute()
-
-            supabase.table("documents").update({
-                "status":     "ready",
-                "page_count": len(pages)
-            }).eq("id", doc_id).execute()
-
-            result["pdf_processed"] = True
-            result["document_id"]   = doc_id
-            result["status"]        = "success"
-            result["message"]       = "Annual report downloaded and processed. You can now ask questions about it."
-            logger.info(f"Auto-Research: PDF processing success. Generated {len(chunks)} chunks.")
-
-        except Exception as e:
-            supabase.table("documents").update({"status": "failed"}).eq("id", doc_id).execute()
-            logger.exception(f"Auto-Research: PDF processing failed: {e}")
-            result["status"]  = "failed"
-            result["message"] = "Auto-research processing failed."
+        result["pdf_processed"] = True
+        result["document_id"]   = doc_id
+        result["status"]        = "processing"
+        result["message"]       = "Annual report downloaded and enqueued for background processing."
     else:
         result["status"]  = "failed"
         result["message"] = "Downloaded PDF was empty or invalid."

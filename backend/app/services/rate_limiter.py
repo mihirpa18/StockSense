@@ -72,12 +72,8 @@ class RateLimitExceeded(Exception):
 
 
 # --- Bucket capacity / refill rate ------------------------------------
-# TODO(mihir): these are placeholders. Check your actual RPM/TPM limits on
-# the Mistral and Gemini dashboards and replace these before relying on
-# this in anything resembling production. Wrong numbers here either
-# throttle you for no reason or don't protect you at all.
 GEMINI_CHAT_CAPACITY = 5          # max tokens (i.e. max burst of calls)
-GEMINI_CHAT_REFILL_RATE = 5/60     # tokens/sec added back (~15/min)
+GEMINI_CHAT_REFILL_RATE = 5/60     # tokens/sec added back (~5/min)
 
 MISTRAL_EMBED_CAPACITY = 1
 MISTRAL_EMBED_REFILL_RATE = 1.0    # ~60/min

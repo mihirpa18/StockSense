@@ -18,8 +18,13 @@ class Horizon(str, Enum):
 class UploadResponse(BaseModel):
     document_id: str
     filename: str
-    page_count: int
-    chunk_count: int
+    # Optional now: the response returns as soon as the file is validated
+    # and queued, before the background worker has actually counted pages
+    # or produced chunks. status="processing" means "not populated yet" —
+    # poll GET /documents/{id} (or your existing document list/detail
+    # endpoint) until status flips to "ready" or "failed" to get real values.
+    page_count: Optional[int] = None
+    chunk_count: Optional[int] = None
     status: str
 
 # NOTE: user_id is intentionally ABSENT from every *Create/*Request model below.

@@ -18,36 +18,41 @@ before making any changes to understand how the pieces fit together.
 StockSense helps Indian retail investors research stocks. A user can:
 
 1. **Search & add companies** from a pre-seeded Nifty 50 list (or create new ones)
-2. **Upload annual reports** (PDF) which get parsed, chunked, embedded, and stored as vectors
+2. **Upload annual reports** (PDF) which get stored, asynchronously parsed, chunked, embedded, and saved as vectors
 3. **Chat with documents** via RAG — ask questions, get answers with page citations
-4. **Build investment theses** — structured notes with confidence scores and time horizons
-5. **Review theses** against newer documents — AI compares assumptions to fresh evidence
-6. **Maintain a decision journal** — log buy/sell decisions with rationale
-7. **Track a watchlist** with live NSE/BSE price data and key fundamentals
+4. **Build investment theses** — structured notes with confidence scores and time horizons (or auto-draft from documents)
+5. **Review theses** against newer documents or web search — AI compares assumptions to fresh evidence
+6. **Write & maintain research notes** — freeform markdown notes for each company
+7. **Maintain a decision journal** — log buy/sell decisions with rationale
+8. **Track a watchlist** with live NSE/BSE price data, key fundamentals, and news
 
 ---
 
 ## Service Architecture
 
-### Three Services (must all be running for full functionality)
+### Services (to run for full functionality)
 
-| Service | Directory | Command | Port |
-|---------|-----------|---------|------|
-| React Frontend | `frontend/` | `npm run dev` | 5173 |
-| FastAPI Backend | `backend/` | `uvicorn app.main:app --reload` | 8000 |
-| NSE Market Service | `backend/market-service/` | `node index.js` | 3000 |
+| Service | Directory | Command | Port / Role |
+|---------|-----------|---------|-------------|
+| React Frontend | `frontend/` | `npm run dev` | Port 5173 |
+| FastAPI Backend | `backend/` | `uvicorn app.main:app --reload` | Port 8000 |
+| NSE Market Service | `backend/market-service/` | `node index.js` | Port 3000 |
+| Arq Worker | `backend/` | `arq app.worker.WorkerSettings` | Background PDF processing |
 
-Plus **Supabase** as the hosted database + auth provider (cloud, not local).
+Plus **Supabase** (Postgres + pgvector + Auth + Storage) and **Upstash Redis** (rate limiting + job queue).
 
 ### Data Flow Patterns
 
 ```
-Frontend ──Bearer JWT──▶ Backend ──service_role──▶ Supabase (Postgres + pgvector)
+Frontend ──Bearer JWT──▶ Backend ──service_role──▶ Supabase (Postgres + pgvector + Storage)
 Frontend ──anon key────▶ Supabase (direct queries, protected by RLS)
-Backend ──HTTP──▶ NSE Market Service (port 3000) ──▶ NSE India API
-Backend ──HTTP──▶ yfinance (Yahoo Finance)
+Backend ──arq/Redis──▶ Worker (async PDF download → parse → chunk → embed → pgvector)
+Backend ──HTTP──▶ NSE Market Service (port 3000) ──▶ NSE India API (live price)
+Backend ──HTTP──▶ SerpApi (Google Finance for fundamentals, stats & news)
 Backend ──HTTP──▶ DuckDuckGo (web search, no API key)
-Backend ──HTTP──▶ Mistral API (embeddings + LLM)
+Backend ──HTTP──▶ Mistral API (embeddings via langchain_mistralai)
+Backend ──HTTP──▶ Google Gemini API (gemini-2.5-flash LLM via langchain_google_genai)
+Backend ──HTTP──▶ LangSmith (tracing & observability)
 ```
 
 ---
@@ -57,15 +62,17 @@ Backend ──HTTP──▶ Mistral API (embeddings + LLM)
 ### Module Dependency Graph
 
 ```
-main.py
+main.py (FastAPI app + arq pool lifespan)
   ├── config.py (Settings from .env via pydantic-settings)
   ├── dependencies.py (JWT verification → get_current_user_id)
+  ├── worker.py (arq background job for document uploads)
   └── routers/
-        ├── upload.py   → services/{pdf_parser, chunker, embedder}
-        ├── chat.py     → services/{retriever, llm}
-        ├── thesis.py   → services/{retriever, llm}
-        ├── journal.py  → (direct Supabase CRUD)
-        └── companies.py → services/{market_data, auto_research_agent}
+        ├── upload.py    → storage.py + arq pool enqueue
+        ├── chat.py      → services/{retriever, llm}
+        ├── thesis.py    → services/{retriever, llm, web_researcher}
+        ├── journal.py   → (direct Supabase CRUD)
+        ├── notes.py     → (direct Supabase CRUD)
+        └── companies.py → services/{market_data, market_data_serp, auto_research_agent}
                              auto_research_agent → {web_researcher, pdf_parser,
                                                      chunker, embedder, llm}
 ```
@@ -74,21 +81,25 @@ main.py
 
 | Method | Route | Router | Auth | Purpose |
 |--------|-------|--------|------|---------|
-| POST | `/api/upload/` | upload.py | ✅ | Upload PDF → parse → chunk → embed → store |
-| POST | `/api/chat/` | chat.py | ✅ | Send question, get RAG answer with citations |
+| GET | `/health` | main.py | ❌ | Health check endpoint |
+| POST | `/api/upload/` | upload.py | ✅ | Upload PDF → validate & store in Storage → enqueue worker job |
+| POST | `/api/chat/` | chat.py | ✅ | Send question, get Gemini RAG answer with citations |
 | GET | `/api/chat/{company_id}/sessions` | chat.py | ✅ | List chat threads |
 | GET | `/api/chat/session/{session_id}` | chat.py | ✅ | Get messages in a thread |
 | POST | `/api/thesis/` | thesis.py | ✅ | Save/upsert investment thesis |
 | GET | `/api/thesis/{company_id}` | thesis.py | ✅ | Get thesis for a company |
-| POST | `/api/thesis/{thesis_id}/review` | thesis.py | ✅ | Review thesis against a document |
+| POST | `/api/thesis/{company_id}/draft` | thesis.py | ✅ | Auto-draft thesis from docs & web search |
+| POST | `/api/thesis/{thesis_id}/review` | thesis.py | ✅ | Review thesis against a document or web search |
+| GET | `/api/notes/{company_id}` | notes.py | ✅ | Get research notes for a company |
+| POST | `/api/notes/` | notes.py | ✅ | Save/upsert research note |
 | POST | `/api/journal/` | journal.py | ✅ | Create journal entry |
 | GET | `/api/journal/` | journal.py | ✅ | List all journal entries |
 | GET | `/api/companies/search?q=` | companies.py | ❌ | Search companies by name/ticker |
 | POST | `/api/companies/` | companies.py | ❌ | Create new company record |
 | GET | `/api/companies/{id}` | companies.py | ❌ | Get company by ID |
-| GET | `/api/companies/{id}/fundamentals` | companies.py | ❌ | Get fundamentals (cached 72h) |
+| GET | `/api/companies/{id}/fundamentals` | companies.py | ❌ | Get fundamentals (SerpApi/yfinance cached) |
 | POST | `/api/companies/{id}/refresh-price` | companies.py | ❌ | Lightweight NSE price refresh |
-| POST | `/api/companies/{id}/refresh-fundamentals` | companies.py | ❌ | Force yfinance refresh |
+| POST | `/api/companies/{id}/refresh-fundamentals` | companies.py | ❌ | Force fundamentals refresh |
 | GET | `/api/companies/watchlist` | companies.py | ✅ | Get user's watchlist |
 | POST | `/api/companies/watchlist/{id}` | companies.py | ✅ | Add to watchlist |
 | DELETE | `/api/companies/watchlist/{id}` | companies.py | ✅ | Remove from watchlist |
@@ -99,21 +110,24 @@ main.py
 
 ### Services Layer
 
-#### RAG Pipeline Services
+#### RAG Pipeline & LLM Services
 
 | Service | File | Responsibility |
 |---------|------|---------------|
 | `pdf_parser.py` | PyMuPDF extraction | PDF bytes → list of `{page_number, text}` |
 | `chunker.py` | Sliding window | Pages → chunks (500 tokens, 50 overlap, tiktoken) |
-| `embedder.py` | Mistral embeddings | Text → 1024-dim vector (batch + single) |
+| `embedder.py` | Mistral embeddings | Text → 1024-dim vector (`MistralAIEmbeddings`, rate-limited) |
 | `retriever.py` | Hybrid search | Question → `match_chunks` RPC → top-5 chunks |
-| `llm.py` | Mistral LLM | Chunks + question → answer with citations |
+| `llm.py` | Gemini 2.5 Flash LLM | RAG answers, thesis review (`ReviewResult`), thesis draft (`ThesisDraft`) |
+| `storage.py` | Supabase Storage | Save/download/delete raw PDF bytes in `raw-uploads` bucket |
+| `rate_limiter.py` | Token bucket | Redis Lua script for rate limiting Gemini chat and Mistral embed calls |
 
 #### Other Services
 
 | Service | File | Responsibility |
 |---------|------|---------------|
 | `market_data.py` | Price + fundamentals | NSE microservice + yfinance (with 429 retry) |
+| `market_data_serp.py` | Google Finance fundamentals | SerpApi: price, stats, about info, ratios, annual/quarterly series & news |
 | `web_researcher.py` | Web tools | DuckDuckGo search, PDF download (SSRF-safe), news fetch |
 | `auto_research_agent.py` | Research agent | Sequential: news → find PDFs → download → RAG ingest |
 
@@ -136,7 +150,7 @@ main.py
 |-------|---------------|---------|
 | `/auth` | Auth.jsx | Login/signup (unprotected) |
 | `/` | Dashboard.jsx | Home dashboard |
-| `/company/:id` | Company.jsx | Full company view (16KB — the largest page) |
+| `/company/:id` | Company.jsx | Full company view (chart, fundamentals, chat, thesis, notes, docs) |
 | `/watchlist` | Watchlist.jsx | Watchlist with live prices |
 | `/journal` | Journal.jsx | Decision journal |
 | `/review` | ThesisReview.jsx | Thesis review UI |
@@ -201,21 +215,21 @@ App.jsx
 
 ## Common Pitfalls & Gotchas
 
-1. **ChatResponse requires session_id**: Every return path in `chat.py` must include `session_id` — it has no default. Missing it causes a Pydantic validation error, not a clean 4xx.
+1. **Async PDF Uploads**: `upload_document` stores raw PDF in Supabase Storage (`raw-uploads` bucket) and returns `status="processing"` immediately. An `arq` background worker (`app/worker.py`) executes the parse → chunk → embed → store pipeline asynchronously.
 
-2. **Document scoping**: When `document_id` is None, retriever searches ALL documents for that company. Always pass `document_id` when reviewing a thesis or when the user selects a specific document.
+2. **ChatResponse requires session_id**: Every return path in `chat.py` must include `session_id` — it has no default. Missing it causes a Pydantic validation error, not a clean 4xx.
 
-3. **Route ordering in companies.py**: Literal routes (`/search`, `/watchlist`) must come before `/{company_id}` or FastAPI will match them as dynamic params.
+3. **Document scoping**: When `document_id` is None, retriever searches ALL documents for that company. Always pass `document_id` when reviewing a thesis or when the user selects a specific document.
 
-4. **Thesis review guards**: Three guards prevent misleading reviews:
+4. **Route ordering in companies.py**: Literal routes (`/search`, `/watchlist`) must come before `/{company_id}` or FastAPI will match them as dynamic params.
+
+5. **Thesis review guards**: Three guards prevent misleading reviews:
    - Can't review against the source document (circular logic)
    - Document must be newer than thesis (stale data)
    - Thesis must belong to the caller (IDOR protection)
 
-5. **yfinance rate limiting**: Returns sparse data on 429. Code checks `len(info) > 5` and retries with exponential backoff.
+6. **Redis dependency**: Redis (Upstash) is required for both the `arq` background worker and the token-bucket rate limiter (`rate_limiter.py`).
 
-6. **Embedding dimension mismatch**: The schema uses `vector(1024)` for Mistral. If switching embedding models, update `schema.sql`, the HNSW index, and the `match_chunks` function signature.
+7. **Embedding dimension mismatch**: The schema uses `vector(1024)` for Mistral. If switching embedding models, update `schema.sql`, the HNSW index, and the `match_chunks` function signature.
 
-7. **Service role key bypasses RLS**: The backend DB client bypasses all RLS policies. Data isolation depends entirely on explicit `user_id` filters in router code.
-
-8. **Config in separate file**: `config.py` exists separately to break circular imports (main → routers → services → settings → main).
+8. **Service role key bypasses RLS**: The backend DB client bypasses all RLS policies. Data isolation depends entirely on explicit `user_id` filters in router code.

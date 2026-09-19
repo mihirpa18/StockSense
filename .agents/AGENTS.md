@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-StockSense is a **full-stack investment research platform** for Indian retail investors. It lets users upload company annual reports (PDFs), chat with them using RAG (Retrieval-Augmented Generation), build and review investment theses, maintain a decision journal, and track a watchlist with live market data.
+StockSense is a **full-stack investment research platform** for Indian retail investors. It lets users upload company annual reports (PDFs), chat with them using RAG (Retrieval-Augmented Generation), build and review investment theses, maintain a decision journal, write research notes, and track a watchlist with live market data.
 
 **Target market:** Indian stock market (NSE/BSE). Currency is INR. Company tickers follow NSE conventions (e.g., `TATAMOTORS`, `RELIANCE`).
 
@@ -24,27 +24,28 @@ StockSense is a **full-stack investment research platform** for Indian retail in
 ┌──────────────────────┐    ┌────────────────────┐
 │  FastAPI Backend     │    │  Supabase          │
 │  Port: 8000          │    │  (Auth + Postgres  │
-│  Prefix: /api/*      │    │   + pgvector)      │
-│  Auth: JWT via       │    │  RLS on all tables │
-│  Depends()           │    └────────────────────┘
-│  DB: service_role    │              ▲
-│  key (bypasses RLS)  │──────────────┘
-└──────────┬───────────┘
-           │ HTTP (localhost:3000)
-           ▼
-┌──────────────────────┐
-│  NSE Market Service  │
-│  (Node.js/Express)   │
-│  stock-nse-india lib │
-│  Port: 3000          │
-└──────────────────────┘
+│  Prefix: /api/*      │    │   + pgvector +     │
+│  Auth: JWT via       │    │   Storage)         │
+│  Depends()           │    │  RLS on all tables │
+│  DB: service_role    │    └────────────────────┘
+│  key (bypasses RLS)  │              ▲
+└──────────┬───────────┘              │
+           │ HTTP (localhost:3000)     │ Storage/DB
+           ▼                          │
+┌──────────────────────┐    ┌─────────┴──────────┐
+│  NSE Market Service  │    │  Arq Worker        │
+│  (Node.js/Express)   │    │  (Background PDF   │
+│  stock-nse-india lib │    │   processing via   │
+│  Port: 3000          │    │   Redis queue)     │
+└──────────────────────┘    └────────────────────┘
 ```
 
-### Three Processes to Run
+### Processes to Run
 
 1. **Frontend:** `cd frontend && npm run dev` → port 5173
-2. **Backend:** `cd backend && uvicorn app.main:app --reload` → port 8000
+2. **Backend API:** `cd backend && uvicorn app.main:app --reload` → port 8000
 3. **Market Service:** `cd backend/market-service && node index.js` → port 3000
+4. **Background Worker:** `cd backend && arq app.worker.WorkerSettings` → processes PDF uploads asynchronously via Redis
 
 ---
 
@@ -55,12 +56,15 @@ StockSense is a **full-stack investment research platform** for Indian retail in
 |-------|-----------|
 | Framework | FastAPI 0.111 + Uvicorn |
 | Language | Python 3.x |
-| Database | Supabase (Postgres + pgvector) |
-| Embeddings | Mistral `mistral-embed` (1024-dim vectors) |
-| LLM | Mistral `mistral-small-latest` (via `mistralai` SDK) |
+| Database | Supabase (Postgres + pgvector + Storage) |
+| Embeddings | Mistral `mistral-embed` (1024-dim vectors via `langchain_mistralai`) |
+| LLM | Google Gemini `gemini-2.5-flash` (via `langchain_google_genai`) |
+| Observability | LangSmith tracing (`@traceable`) |
+| Job Queue & Caching | Redis (Upstash) + `arq` background worker |
+| Rate Limiting | Redis-backed token bucket with Lua scripts |
 | PDF parsing | PyMuPDF (`fitz`) |
 | Tokenization | `tiktoken` (cl100k_base) |
-| Market data | `yfinance` + custom Node.js NSE service |
+| Market & Fundamental Data | `market_data_serp` (SerpApi Google Finance) + custom Node.js NSE service + `yfinance` |
 | Web search | `duckduckgo-search` (no API key) |
 | Auth | JWT verification via `python-jose` (ES256 + HS256) |
 | Config | `pydantic-settings` (`.env` file) |
@@ -82,6 +86,7 @@ StockSense is a **full-stack investment research platform** for Indian retail in
 - **HNSW index** on embeddings (cosine similarity)
 - **GIN index** for full-text search
 - **RLS** on all user-data tables
+- **Storage**: `raw-uploads` private bucket for PDF uploads
 - **Hybrid search** via `match_chunks` RPC (RRF algorithm)
 
 ---
@@ -92,26 +97,32 @@ StockSense is a **full-stack investment research platform** for Indian retail in
 stocksense/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app, CORS, middleware, router registration
-│   │   ├── config.py            # pydantic-settings (env vars)
+│   │   ├── main.py              # FastAPI app, CORS, middleware, arq pool lifespan, routers
+│   │   ├── worker.py            # arq background worker (PDF download → parse → chunk → embed → store)
+│   │   ├── config.py            # pydantic-settings (env vars: Supabase, Gemini, Mistral, SerpApi, Redis, LangSmith)
 │   │   ├── dependencies.py      # JWT auth: get_current_user_id (ES256/HS256)
 │   │   ├── db/
-│   │   │   └── supabase.py      # Supabase client factory (service_role key)
+│   │   │   ├── supabase.py      # Supabase client factory (service_role key)
+│   │   │   └── redis_client.py  # Sync Redis client singleton
 │   │   ├── models/
 │   │   │   └── schemas.py       # Pydantic request/response models
 │   │   ├── routers/
 │   │   │   ├── chat.py          # POST /api/chat/, GET sessions/history
 │   │   │   ├── companies.py     # CRUD, search, watchlist, fundamentals, auto-research
-│   │   │   ├── thesis.py        # Save, get, review thesis
+│   │   │   ├── thesis.py        # Save, get, review thesis, draft thesis
 │   │   │   ├── journal.py       # Create/list journal entries
-│   │   │   └── upload.py        # PDF upload → parse → chunk → embed → store
+│   │   │   ├── notes.py         # Save/list research notes
+│   │   │   └── upload.py        # PDF upload → store raw PDF → enqueue arq worker job
 │   │   ├── services/
-│   │   │   ├── llm.py           # Mistral RAG answer + thesis review
+│   │   │   ├── llm.py           # Gemini 2.5 Flash RAG answer + thesis review + thesis draft
 │   │   │   ├── retriever.py     # Hybrid search via match_chunks RPC
-│   │   │   ├── embedder.py      # Mistral embeddings (1024-dim)
+│   │   │   ├── embedder.py      # Mistral embeddings (1024-dim, rate-limited)
 │   │   │   ├── chunker.py       # Sliding window chunker (500 tokens, 50 overlap)
 │   │   │   ├── pdf_parser.py    # PyMuPDF text extraction
+│   │   │   ├── storage.py       # Supabase Storage helper (raw-uploads bucket)
+│   │   │   ├── rate_limiter.py  # Redis token bucket rate limiter
 │   │   │   ├── market_data.py   # yfinance + NSE node service
+│   │   │   ├── market_data_serp.py # SerpApi Google Finance fundamentals, ratios & news
 │   │   │   ├── web_researcher.py # DuckDuckGo search, PDF download, SSRF protection
 │   │   │   └── auto_research_agent.py # Sequential agent: search → download → RAG ingest
 │   │   └── utils/
@@ -133,7 +144,7 @@ stocksense/
 │   │   ├── pages/
 │   │   │   ├── Auth.jsx         # Login/signup page
 │   │   │   ├── Dashboard.jsx    # Home dashboard
-│   │   │   ├── Company.jsx      # Company detail (chart, fundamentals, chat, thesis, docs)
+│   │   │   ├── Company.jsx      # Company detail (chart, fundamentals, chat, thesis, notes, docs)
 │   │   │   ├── Watchlist.jsx    # User's watchlist with prices
 │   │   │   ├── Journal.jsx      # Decision journal entries
 │   │   │   └── ThesisReview.jsx # Thesis review against new documents
@@ -162,8 +173,13 @@ stocksense/
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Service role key (bypasses RLS) — **never expose to frontend** |
 | `SUPABASE_JWT_SECRET` | Used to verify HS256 JWTs |
-| `GEMINI_API_KEY` | Google Gemini API key (currently unused, was used before Mistral migration) |
-| `MISTRAL_API_KEY` | Mistral AI API key (embeddings + LLM) |
+| `GEMINI_API_KEY` | Google Gemini API key (used for `gemini-2.5-flash` LLM) |
+| `MISTRAL_API_KEY` | Mistral AI API key (`mistral-embed` embeddings) |
+| `SERPAPI_KEY` | SerpApi key for Google Finance fundamentals, stats, & news |
+| `REDIS_URL` | Upstash Redis connection URL (rate limiter, caching, arq worker) |
+| `LANGSMITH_TRACING` | Set `"true"` to enable LangSmith tracing |
+| `LANGSMITH_API_KEY` | LangSmith API key |
+| `LANGSMITH_PROJECT` | LangSmith project name (default: `stocksense`) |
 | `FRONTEND_URL` | CORS origin (default: `http://localhost:5173`) |
 
 ### Frontend (`frontend/.env`)
@@ -198,17 +214,20 @@ stocksense/
 ## RAG Pipeline (Core Feature)
 
 ```
-Upload PDF → PyMuPDF extract → Sliding window chunk (500 tokens, 50 overlap)
-           → Mistral embed (1024-dim) → Store in chunks table (pgvector)
+Upload PDF → Store raw PDF in Supabase Storage ("raw-uploads")
+           → Enqueue arq background job → PyMuPDF extract → Sliding window chunk (500 tokens, 50 overlap)
+           → Mistral embed (1024-dim, rate-limited) → Store in chunks table (pgvector) → Delete raw PDF
 
 User asks question → Embed question → match_chunks RPC (Hybrid Search: 
                      cosine similarity + GIN full-text → RRF fusion)
-                   → Top 5 chunks → Mistral LLM generates answer with citations
+                   → Top 5 chunks → Gemini 2.5 Flash LLM generates answer with citations
 ```
 
 ### Key Design Decisions
-- **Embedding model**: Mistral `mistral-embed` (1024 dimensions)
-- **LLM**: Mistral `mistral-small-latest`
+- **Embedding model**: Mistral `mistral-embed` (1024 dimensions via `langchain_mistralai`)
+- **LLM**: Google Gemini `gemini-2.5-flash` (via `langchain_google_genai`)
+- **Background Processing**: Asynchronous via `arq` worker process and Redis
+- **Rate Limiting**: Redis token bucket algorithm with atomic Lua scripts
 - **Chunk size**: 500 tokens with 50-token overlap
 - **Top-K**: 5 chunks retrieved per query
 - **Hybrid search**: Reciprocal Rank Fusion (RRF, k=60) combining semantic + keyword search
@@ -225,7 +244,7 @@ User asks question → Embed question → match_chunks RPC (Hybrid Search:
 | `watchlist` | User's tracked companies | `user_id`, `company_id` (unique pair) |
 | `documents` | Uploaded PDFs metadata | `status` (processing/ready/failed), `doc_type`, `fiscal_year` |
 | `chunks` | RAG vector store | `content`, `embedding` (vector(1024)), `page_number` |
-| `notes` | Freeform research notes | `content` (markdown), one per user+company |
+| `notes` | Freeform research notes | `content` (markdown), `company_id`, `user_id` |
 | `theses` | Investment theses | `why_interested`, `key_risks`, `confidence` (1-10), `horizon` |
 | `journal_entries` | Buy/sell decision journal | `price`, `quantity`, `reason`, `risks_identified` |
 | `thesis_reviews` | AI review results | `review_result` (JSONB with assumptions + statuses) |
@@ -281,8 +300,9 @@ User asks question → Embed question → match_chunks RPC (Hybrid Search:
 ## Important Caveats
 
 - The backend uses **Supabase service_role key** which **bypasses all RLS**. Data isolation relies entirely on explicit `user_id` filters in each router.
-- The `fundamentals_cache` in the companies table caches yfinance data for 72 hours to avoid rate limiting.
+- Document uploads run asynchronously through `arq` (`app/worker.py`). `upload_document` returns status `"processing"` immediately; clients poll or wait until status flips to `"ready"`.
+- The `fundamentals_cache` in the companies table caches SerpApi/yfinance data to avoid rate limiting.
 - The NSE market service (`market-service/`) must be running on port 3000 for live price data.
-- `yfinance` has aggressive rate limiting (429s). The code implements retry-with-backoff.
+- Upstash Redis is required for the `arq` job queue and token-bucket rate limiting (`rate_limiter.py`).
 - DuckDuckGo search uses `backend="lite"` to avoid JS/VQD rate limiting.
 - The auto-research agent is a **sequential pipeline**, not a graph-based agent — no LangGraph.
